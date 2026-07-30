@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Bar,
@@ -15,35 +15,39 @@ import {
 
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
+import { PlotlySunburst } from '@/components/charts/plotly-sunburst'
 import { cn } from '@/lib/utils'
 import { countBy, useProcessedData } from '@/services/state/processed-data-context'
 
 const TABS = ['ABC', 'RFM', 'Risk'] as const
 type Tab = (typeof TABS)[number]
+
 const COLORS = ['#2563eb', '#0ea5e9', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2']
 
 export function ProductSegmentationPage() {
   const { result } = useProcessedData()
   const [tab, setTab] = useState<Tab>('ABC')
 
-  const dist = useMemo(() => {
-    if (!result) return null
+  /* ----- distribution chart data ----- */
+  const distData = (() => {
+    if (!result) return []
     const field =
       tab === 'ABC' ? 'ABC_Class' : tab === 'RFM' ? 'RFM_Category' : 'Risk_Category'
     const raw = countBy(result.data, field)
     return Object.entries(raw)
       .map(([k, v]) => ({ name: k, count: v }))
       .sort((a, b) => b.count - a.count)
-  }, [result, tab])
+  })()
 
-  const subtitle = useMemo(() => {
-    if (tab === 'ABC') return 'Pareto-based demand contribution segmentation.'
-    if (tab === 'RFM') return 'Recency-Frequency-Monetary behavioral classification.'
-    return 'Customer concentration and business risk categorization.'
-  }, [tab])
+  const subtitle =
+    tab === 'ABC'
+      ? 'Demand contribution segmentation.'
+      : tab === 'RFM'
+        ? 'Recency-Frequency-Monetary behavioral classification.'
+        : 'Customer concentration risk categorization.'
 
-  /* ----- cross-tabulation (ABC × RFM) for the combined view ----- */
-  const crossTab = useMemo(() => {
+  /* ----- cross-tab (ABC × RFM) ----- */
+  const crossTab = (() => {
     if (!result) return []
     const map = new Map<string, number>()
     for (const row of result.data) {
@@ -53,7 +57,7 @@ export function ProductSegmentationPage() {
     return [...map.entries()]
       .map(([k, v]) => ({ name: k, count: v }))
       .sort((a, b) => b.count - a.count)
-  }, [result])
+  })()
 
   if (!result) {
     return (
@@ -72,56 +76,78 @@ export function ProductSegmentationPage() {
     <div>
       <PageHeader
         title="Product Segmentation"
-        subtitle="Unified segmentation workspace for ABC, RFM, and Risk logic."
+        subtitle="Hierarchical product breakdown, classification distributions, and advanced analytics."
       />
 
-      {/* Tabs */}
-      <div className="mb-4 inline-flex rounded-xl border border-border bg-card p-1">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={cn(
-              'rounded-lg px-4 py-2 text-sm transition-colors',
-              t === tab ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t}
-          </button>
-        ))}
+      {/* ============ Row 1: Sunburst (full width) ============ */}
+      <div className="mb-4">
+        <ContentCard
+          title="Product Hierarchy Sunburst"
+          description="Item_Category_Code → Product Group Code → Product_SubGroup_Code. Sized by order amount, colored by Contribution %."
+          className="overflow-hidden"
+        >
+          <div className="h-[500px]">
+            <PlotlySunburst data={result.data} />
+          </div>
+        </ContentCard>
       </div>
 
-      {/* Distribution charts */}
-      <ContentCard title={`${tab} Distribution`} description={subtitle}>
-        <div className="grid gap-4 xl:grid-cols-2">
-          <div className="h-72 rounded-xl border border-border bg-background/60 p-2">
+      {/* ============ Row 2: Distribution charts ============ */}
+      <div className="mb-4 grid gap-4 xl:grid-cols-2">
+        {/* Bar chart with tabs */}
+        <ContentCard title={`${tab} Distribution`} description={subtitle}>
+          <div className="mb-3 inline-flex rounded-lg border border-border bg-background p-0.5">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                className={cn(
+                  'rounded-md px-3 py-1 text-xs transition-colors',
+                  t === tab
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+          <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={dist ?? []} margin={{ top: 16, right: 12, left: 0, bottom: 36 }}>
+              <BarChart data={distData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" angle={-20} textAnchor="end" height={56} interval={0} />
-                <YAxis />
+                <XAxis dataKey="name" angle={-15} textAnchor="end" height={40} interval={0} fontSize={11} />
+                <YAxis fontSize={11} />
                 <Tooltip />
-                <Bar dataKey="count" name="Products" fill="#2563eb" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="count" name="Products" fill="#2563eb" radius={[4, 4, 0, 0]}>
+                  {distData.map((entry, idx) => (
+                    <Cell key={entry.name} fill={COLORS[idx % COLORS.length]} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
+        </ContentCard>
 
-          <div className="h-72 rounded-xl border border-border bg-background/60 p-2">
+        {/* Donut */}
+        <ContentCard title={`${tab} Proportions`} description="Share of total products.">
+          <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={dist ?? []}
+                  data={distData}
                   dataKey="count"
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  outerRadius={100}
+                  outerRadius={70}
+                  innerRadius={30}
                   label={({ name, percent }: { name?: string; percent?: number }) =>
-                    `${name}: ${((percent ?? 0) * 100).toFixed(1)}%`
+                    `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
                   }
                 >
-                  {(dist ?? []).map((entry, idx) => (
+                  {distData.map((entry, idx) => (
                     <Cell key={entry.name} fill={COLORS[idx % COLORS.length]} />
                   ))}
                 </Pie>
@@ -129,12 +155,12 @@ export function ProductSegmentationPage() {
               </PieChart>
             </ResponsiveContainer>
           </div>
-        </div>
-      </ContentCard>
+        </ContentCard>
+      </div>
 
-      {/* ABC × RFM cross-tabulation */}
-      {tab === 'ABC' && (
-        <ContentCard title="ABC × RFM Cross-Tab" description="Combined segmentation matrix — all products by ABC class and RFM category." className="mt-4">
+      {/* ============ Row 3: ABC × RFM Cross-Tab ============ */}
+      <div className="mb-4">
+        <ContentCard title="ABC × RFM Cross-Tabulation" description="Product count per combined ABC × RFM segment.">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
@@ -158,7 +184,7 @@ export function ProductSegmentationPage() {
             </table>
           </div>
         </ContentCard>
-      )}
+      </div>
     </div>
   )
 }
