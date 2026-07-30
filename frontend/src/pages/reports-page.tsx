@@ -1,11 +1,63 @@
+import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
 
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
 import { useProcessedData } from '@/services/state/processed-data-context'
+import { apiClient } from '@/services/api/client'
 
 export function ReportsPage() {
-  const { dataset } = useProcessedData()
+  const { result } = useProcessedData()
+
+  const handleDownloadCsv = () => {
+    if (!result) {
+      toast.error('No data to export. Run the pipeline first.')
+      return
+    }
+    try {
+      const headers = result.columns.join(',')
+      const rows = result.data.map((row) =>
+        result.columns
+          .map((col) => {
+            const v = row[col]
+            if (v === null || v === undefined) return ''
+            const s = String(v)
+            // Escape commas and quotes
+            return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s
+          })
+          .join(','),
+      )
+      const csv = [headers, ...rows].join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `pipeline_output_${result.sheetName}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`Exported ${result.rows.toLocaleString()} rows to CSV.`)
+    } catch {
+      toast.error('Failed to generate CSV.')
+    }
+  }
+
+  const handleDownloadExcel = async () => {
+    try {
+      const response = await apiClient.get('/download', { responseType: 'blob' })
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `pipeline_output_${result?.sheetName ?? 'data'}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('Excel file downloaded.')
+    } catch {
+      toast.error('Failed to download Excel. Ensure pipeline has been run via the API.')
+    }
+  }
 
   return (
     <div>
@@ -14,42 +66,47 @@ export function ReportsPage() {
         subtitle="Export-ready reporting center for operational and executive distribution."
       />
 
-      {!dataset && (
-        <ContentCard title="No Report Dataset" description="Run the pipeline first from Overview.">
+      {!result && (
+        <ContentCard title="No Data" description="Run the pipeline first.">
           <p className="text-sm text-muted-foreground">
-            Reports become meaningful after processing data. Open <Link to="/overview" className="text-primary underline">Overview</Link> and run analysis.
+            Open <Link to="/overview" className="text-primary underline">Overview</Link> to process data, then return here to export.
           </p>
         </ContentCard>
       )}
 
-      {dataset && (
+      {result && (
         <div className="mb-4 rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
-          Active report source: sheet {dataset.sheetName} | {dataset.rows.toLocaleString()} rows | processed{' '}
-          {new Date(dataset.processedAt).toLocaleString()}
+          Active report source: sheet <strong>{result.sheetName}</strong> ·{' '}
+          {result.rows.toLocaleString()} rows · {result.columns.length} columns · processed{' '}
+          {new Date(result.processedAt).toLocaleString()}
         </div>
       )}
 
       <div className="grid gap-4 md:grid-cols-3">
-        <ContentCard title="Excel" description="Download API generated workbook output.">
+        <ContentCard title="CSV" description="Export all pipeline data as CSV for ad-hoc analysis.">
           <button
             type="button"
-            className="rounded-xl bg-primary px-3 py-2 text-sm text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!dataset}
-          >
-            Download Excel
-          </button>
-        </ContentCard>
-        <ContentCard title="CSV" description="Export visible table data for ad-hoc analysis.">
-          <button
-            type="button"
-            className="rounded-xl border border-border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!dataset}
+            onClick={handleDownloadCsv}
+            disabled={!result}
+            className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             Export CSV
           </button>
         </ContentCard>
+
+        <ContentCard title="Excel" description="Download full workbook via API (same format as pipeline output).">
+          <button
+            type="button"
+            onClick={handleDownloadExcel}
+            disabled={!result}
+            className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Download Excel
+          </button>
+        </ContentCard>
+
         <ContentCard title="PDF" description="Planned enterprise report package.">
-          <p className="text-sm text-muted-foreground">Coming soon</p>
+          <p className="text-sm text-muted-foreground">Coming in a future release.</p>
         </ContentCard>
       </div>
     </div>

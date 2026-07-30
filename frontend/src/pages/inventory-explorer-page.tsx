@@ -1,256 +1,331 @@
+import { ChevronDown, FilterX, Search } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
-import { PageHeader } from '@/components/common/page-header'
 import { ContentCard } from '@/components/common/content-card'
+import { PageHeader } from '@/components/common/page-header'
 import { useProcessedData } from '@/services/state/processed-data-context'
 
-function formatColumnLabel(column: string, serviceLevelMode: 'fixed' | 'dynamic', fixedServiceLevel: number) {
-  const fixedPct = fixedServiceLevel <= 1 ? fixedServiceLevel * 100 : fixedServiceLevel
-  const fixedPctLabel = Number.isInteger(fixedPct) ? String(fixedPct) : fixedPct.toFixed(1)
+const PAGE_SIZE = 20
 
-  if (serviceLevelMode === 'fixed' && column === 'ROL_Client') return `ROL @ ${fixedPctLabel}%`
-  if (serviceLevelMode === 'fixed' && column === 'ROL_Weekly_Client') return `ROL Weekly @ ${fixedPctLabel}%`
-  if (serviceLevelMode === 'fixed' && column === 'ROL_Monthly_Client') return `ROL Monthly @ ${fixedPctLabel}%`
-  if (serviceLevelMode === 'fixed' && column === 'Safety_Stock_Client') return `Safety Stock @ ${fixedPctLabel}%`
-  if (serviceLevelMode === 'fixed' && column === 'Service_Level_Client') return `Safety Level @ ${fixedPctLabel}%`
-  if (column === 'ROL_ABC_RF') return 'ROL (ABC-RF)'
-  if (column === 'ROL_Weekly_ABC_RF') return 'ROL Weekly (ABC-RF)'
-  if (column === 'ROL_Monthly_ABC_RF') return 'ROL Monthly (ABC-RF)'
-  if (column === 'Safety_Stock_ABC_RF') return 'Safety Stock (ABC-RF)'
-  if (column === 'Service_Level_ABC_RF') return 'Service Level (ABC-RF)'
-  if (column === 'ROL_Client') return 'ROL (Client)'
-  if (column === 'ROL_Weekly_Client') return 'ROL Weekly (Client)'
-  if (column === 'ROL_Monthly_Client') return 'ROL Monthly (Client)'
-  if (column === 'Safety_Stock_Client') return 'Safety Stock (Client)'
-  if (column === 'Service_Level_Client') return 'Safety Level (Client)'
-  if (column === 'D_Avg_Week') return 'D Avg (Weekly)'
-  if (column === 'D_Max_Week_Client') return 'D Max (Weekly, Client)'
-  if (column === 'D_Max_Week_ABC_RF') return 'D Max (Weekly, ABC-RF)'
-  if (column === 'Volume_Bin_Size') return 'Volume Bin Size'
-  if (column === 'Volume_Bin_Size_Derived') return 'Volume Bin Size'
-  if (column === 'ROL_Weekly_Client_Derived') return `ROL Weekly @ ${fixedPctLabel}%`
-  if (column === 'ROL_Monthly_Client_Derived') return `ROL Monthly @ ${fixedPctLabel}%`
-  if (column === 'ROL_Weekly_ABC_RF_Derived') return 'ROL Weekly (ABC-RF)'
-  if (column === 'ROL_Monthly_ABC_RF_Derived') return 'ROL Monthly (ABC-RF)'
+const KEY_COLUMNS = [
+  'Item_Code',
+  'ABC_Class',
+  'RFM_Category',
+  'Risk_Category',
+  'rol_static',
+  'rol_dynamic',
+  'st_safety_stock',
+  'dy_safety_stock',
+  'st_avg_weekly_demand',
+  'dy_avg_weekly_demand',
+  'st_dmax_week',
+  'dy_dmax_week',
+  'total_weeks',
+  'weeks_with_orders',
+  'weeks_with_zero_orders',
+  'mode_order_qty',
+  'Item_Category_Code',
+  'Product Group Code',
+  'Product_SubGroup_Code',
+  'Recency',
+  'Frequency',
+  'Monetary',
+  'R_Score',
+  'F_Score',
+  'M_Score',
+  'RFM_Score',
+  'ABC_Quantum',
+  'Contribution (%)',
+  'Cumulative Contribution (%)',
+]
 
-  return column
+const COL_LABELS: Record<string, string> = {
+  Item_Code: 'Item Code',
+  ABC_Class: 'ABC',
+  RFM_Category: 'RFM',
+  Risk_Category: 'Risk',
+  rol_static: 'ROL (S)',
+  rol_dynamic: 'ROL (D)',
+  st_safety_stock: 'SS (S)',
+  dy_safety_stock: 'SS (D)',
+  st_avg_weekly_demand: 'Avg Wk (S)',
+  dy_avg_weekly_demand: 'Avg Wk (D)',
+  st_dmax_week: 'Dmax Wk (S)',
+  dy_dmax_week: 'Dmax Wk (D)',
+  total_weeks: 'Tot Wks',
+  weeks_with_orders: 'Wks w/ Ord',
+  weeks_with_zero_orders: 'Wks Zero',
+  mode_order_qty: 'Mode Qty',
+  Item_Category_Code: 'Category',
+  'Product Group Code': 'Group',
+  Product_SubGroup_Code: 'Subgroup',
+  Recency: 'Recency',
+  Frequency: 'Frequency',
+  Monetary: 'Monetary',
+  R_Score: 'R',
+  F_Score: 'F',
+  M_Score: 'M',
+  RFM_Score: 'RFM',
+  ABC_Quantum: 'Quantum',
+  'Contribution (%)': 'Contrib %',
+  'Cumulative Contribution (%)': 'Cumul %',
 }
 
-function getDisplayValue(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === '') return ''
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) return ''
-    if (Number.isInteger(value)) return value.toLocaleString()
-    return value.toFixed(4).replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1')
+function fmt(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return '—'
+    if (Number.isInteger(v)) return v.toLocaleString()
+    return v.toFixed(2)
   }
-  return String(value)
+  return String(v)
 }
+
+/** Return a short display value for filter dropdowns (truncate long strings). */
+function filterLabel(v: unknown): string {
+  const s = fmt(v)
+  return s.length > 28 ? s.slice(0, 26) + '…' : s
+}
+
+/* ---------- component ---------- */
 
 export function InventoryExplorerPage() {
-  const { dataset } = useProcessedData()
+  const { result } = useProcessedData()
+  const [searchTerm, setSearchTerm] = useState('')
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  // ---------- columns ----------
+  const columns = useMemo(() => {
+    if (!result) return []
+    return KEY_COLUMNS.filter((c) => result.columns.includes(c))
+  }, [result])
 
-  if (!dataset) {
+  // ---------- unique values per column ----------
+  const uniqueValuesByColumn = useMemo(() => {
+    if (!result) return {} as Record<string, string[]>
+    const map: Record<string, string[]> = {}
+    for (const col of columns) {
+      const set = new Set<string>()
+      for (const row of result.data) {
+        const v = fmt(row[col])
+        if (v && v !== '—') set.add(v)
+      }
+      const sorted = [...set].sort((a, b) => {
+        const na = Number(a), nb = Number(b)
+        if (!isNaN(na) && !isNaN(nb)) return na - nb
+        return a.localeCompare(b)
+      })
+      map[col] = sorted.slice(0, 100) // cap at 100 unique values per column
+    }
+    return map
+  }, [result, columns])
+
+  // ---------- filtered rows ----------
+  const filtered = useMemo(() => {
+    if (!result) return []
+    let rows = result.data
+
+    // Apply per-column filters
+    const activeFilters = Object.entries(columnFilters).filter(([, v]) => v)
+    if (activeFilters.length > 0) {
+      rows = rows.filter((r) =>
+        activeFilters.every(([col, val]) => String(r[col] ?? '') === val),
+      )
+    }
+
+    // Apply global search
+    if (searchTerm.trim()) {
+      const q = searchTerm.trim().toLowerCase()
+      rows = rows.filter((r) =>
+        columns.some((c) => String(r[c] ?? '').toLowerCase().includes(q)),
+      )
+    }
+
+    return rows
+  }, [result, columnFilters, searchTerm, columns])
+
+  // ---------- paginated slice ----------
+  const page = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
+  const hasMore = visibleCount < filtered.length
+
+  const handleShowMore = () => {
+    setVisibleCount((prev) => prev + PAGE_SIZE)
+  }
+
+  const activeFilterCount = Object.values(columnFilters).filter(Boolean).length
+
+  const clearAllFilters = () => {
+    setColumnFilters({})
+    setSearchTerm('')
+    setVisibleCount(PAGE_SIZE)
+  }
+
+  // ---------- render ----------
+  if (!result) {
     return (
       <div>
-        <PageHeader
-          title="Inventory Explorer"
-          subtitle="Enterprise product table with filtering, drill-down, and export workflows."
-        />
-        <ContentCard title="No Processed Dataset" description="Run the pipeline first from Overview.">
+        <PageHeader title="Inventory Explorer" subtitle="Browse all products with full pipeline metrics." />
+        <ContentCard title="No Data" description="Run the pipeline first from Overview.">
           <p className="text-sm text-muted-foreground">
-            Explorer data appears after Step 4 succeeds. Open <Link to="/overview" className="text-primary underline">Overview</Link> and click Run Analysis.
+            Go to <Link to="/overview" className="text-primary underline">Overview</Link> and run analysis.
           </p>
         </ContentCard>
       </div>
     )
   }
 
-  const preferredColumns =
-    dataset.serviceLevelMode === 'fixed'
-      ? [
-          'Item_Code',
-          'Total_Orders',
-          'Total_Qty',
-          'Avg_Order_Qty',
-          'Customers',
-          'Avg_Weekly_Qty',
-          'Std_Weekly_Qty',
-          'Demand_CV',
-          'Volume_Bin_Size',
-          'D_Avg_Week',
-          'D_Max_Week_Client',
-          'Service_Level_Client',
-          'Safety_Stock_Client',
-          'ROL_Weekly_Client',
-          'ROL_Monthly_Client',
-          'ROL_Client',
-          'Recommended_Inventory_Policy',
-        ]
-      : [
-          'Item_Code',
-          'ABC_Class',
-          'RF_Category',
-          'ABC_RF_Segment',
-          'Total_Orders',
-          'Total_Qty',
-          'Avg_Order_Qty',
-          'Volume_Bin_Size',
-          'D_Avg_Week',
-          'D_Max_Week_ABC_RF',
-          'Service_Level_ABC_RF',
-          'Safety_Stock_ABC_RF',
-          'ROL_Weekly_ABC_RF',
-          'ROL_Monthly_ABC_RF',
-          'ROL_ABC_RF',
-          'Recommended_Inventory_Policy',
-        ]
-
-  const tableColumns = preferredColumns
-    .map((column) => {
-      if (dataset.columns.includes(column)) return column
-      if (column === 'Volume_Bin_Size') return 'Volume_Bin_Size_Derived'
-      if (column === 'ROL_Weekly_Client') return 'ROL_Weekly_Client_Derived'
-      if (column === 'ROL_Monthly_Client') return 'ROL_Monthly_Client_Derived'
-      if (column === 'ROL_Weekly_ABC_RF') return 'ROL_Weekly_ABC_RF_Derived'
-      if (column === 'ROL_Monthly_ABC_RF') return 'ROL_Monthly_ABC_RF_Derived'
-      return null
-    })
-    .filter((column): column is string => column !== null)
-
-  const getRowValue = (row: Record<string, string | number | boolean | null>, column: string) => {
-    if (column === 'Volume_Bin_Size_Derived') {
-      const totalQty = Number(row.Total_Qty ?? 0)
-      if (!Number.isFinite(totalQty)) return ''
-      if (totalQty <= 300) return 0
-      if (totalQty <= 600) return 12
-      return 24
-    }
-
-    const leadTime = Number(row.Lead_Time_Weeks ?? 4)
-    const safeLeadTime = Number.isFinite(leadTime) && leadTime > 0 ? leadTime : 4
-
-    if (column === 'ROL_Weekly_Client_Derived') {
-      const rol = Number(row.ROL_Client ?? 0)
-      return Number.isFinite(rol) ? rol / safeLeadTime : ''
-    }
-    if (column === 'ROL_Monthly_Client_Derived') {
-      const rol = Number(row.ROL_Client ?? 0)
-      return Number.isFinite(rol) ? (rol / safeLeadTime) * 4 : ''
-    }
-    if (column === 'ROL_Weekly_ABC_RF_Derived') {
-      const rol = Number(row.ROL_ABC_RF ?? 0)
-      return Number.isFinite(rol) ? rol / safeLeadTime : ''
-    }
-    if (column === 'ROL_Monthly_ABC_RF_Derived') {
-      const rol = Number(row.ROL_ABC_RF ?? 0)
-      return Number.isFinite(rol) ? (rol / safeLeadTime) * 4 : ''
-    }
-
-    return row[column]
-  }
-
-  const activeFilterCount = tableColumns.reduce((count, column) => {
-    return count + (columnFilters[column]?.trim() ? 1 : 0)
-  }, 0)
-
-  const uniqueValuesByColumn: Record<string, string[]> = {}
-  for (const column of tableColumns) {
-    const values = new Set<string>()
-    for (const row of dataset.data) {
-      const value = getDisplayValue(getRowValue(row, column)).trim()
-      if (value) values.add(value)
-    }
-    uniqueValuesByColumn[column] = Array.from(values).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  }
-
-  const filteredRows = dataset.data.filter((row) => {
-    return tableColumns.every((column) => {
-      const needle = columnFilters[column]?.trim().toLowerCase()
-      if (!needle) return true
-      const columnText = getDisplayValue(getRowValue(row, column)).toLowerCase()
-      return columnText === needle
-    })
-  })
-
-  const modeLabel =
-    dataset.serviceLevelMode === 'fixed'
-      ? `Client fixed mode (${dataset.fixedServiceLevel <= 1 ? (dataset.fixedServiceLevel * 100).toFixed(0) : dataset.fixedServiceLevel}%)`
-      : 'ABC-RF dynamic mode'
-
   return (
     <div>
       <PageHeader
         title="Inventory Explorer"
-        subtitle="Enterprise product table with filtering, drill-down, and export workflows."
+        subtitle={`${result.rows.toLocaleString()} products · ${columns.length} metrics`}
       />
 
-      <ContentCard title="Dataset Snapshot" description={`Sheet ${dataset.sheetName} | ${dataset.rows.toLocaleString()} rows`}>
-        <div className="mb-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          <span className="rounded-full border border-border px-2 py-1">Mode: {modeLabel}</span>
-          <span className="rounded-full border border-border px-2 py-1">Columns: {dataset.columns.length}</span>
-          <span className="rounded-full border border-border px-2 py-1">
-            Showing {filteredRows.length.toLocaleString()} of {dataset.rows.toLocaleString()} rows
+      <ContentCard
+        title="Product Table"
+        description="Each column has its own filter dropdown (like Excel). Showing first 20 by default."
+      >
+        {/* ---------- Toolbar ---------- */}
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          {/* Global search */}
+          <label className="relative min-w-56">
+            <Search
+              size={15}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <input
+              type="text"
+              placeholder="Search across all columns…"
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value)
+                setVisibleCount(PAGE_SIZE)
+              }}
+              className="h-9 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-ring"
+            />
+          </label>
+
+          {/* Filter stats */}
+          <span className="text-xs text-muted-foreground">
+            {activeFilterCount > 0 ? `${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''} active · ` : ''}
+            Showing {page.length.toLocaleString()} of {filtered.length.toLocaleString()} products
           </span>
-          <span className="rounded-full border border-border px-2 py-1">
-            Active column filters: {activeFilterCount}
-          </span>
-          <button
-            type="button"
-            onClick={() => setColumnFilters({})}
-            className="rounded-full border border-border px-3 py-1 text-xs text-foreground hover:bg-muted/60"
-          >
-            Clear all filters
-          </button>
+
+          {/* Clear all */}
+          {(activeFilterCount > 0 || searchTerm) && (
+            <button
+              type="button"
+              onClick={clearAllFilters}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:bg-muted/60"
+            >
+              <FilterX size={13} />
+              Clear
+            </button>
+          )}
         </div>
 
+        {/* ---------- Scrollable table ---------- */}
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="min-w-full border-collapse text-sm">
+            {/* ---- Header row ---- */}
             <thead className="bg-muted/60">
               <tr>
-                {tableColumns.map((column) => (
-                  <th key={column} className="border-b border-border px-3 py-2 text-left font-medium text-foreground">
-                    {formatColumnLabel(column, dataset.serviceLevelMode, dataset.fixedServiceLevel)}
-                  </th>
-                ))}
-              </tr>
-              <tr>
-                {tableColumns.map((column) => (
-                  <th key={column + '_filter'} className="border-b border-border bg-background px-2 py-2 text-left">
-                    <select
-                      value={columnFilters[column] ?? ''}
-                      onChange={(e) =>
-                        setColumnFilters((prev) => ({
-                          ...prev,
-                          [column]: e.target.value,
-                        }))
-                      }
-                      className="h-8 w-full min-w-36 rounded-lg border border-border bg-background px-2 text-xs font-normal text-foreground outline-none focus:border-ring"
-                    >
-                      <option value="">All</option>
-                      {uniqueValuesByColumn[column].map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
+                {columns.map((col) => (
+                  <th
+                    key={col}
+                    className="whitespace-nowrap border-b border-border px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  >
+                    {COL_LABELS[col] ?? col}
                   </th>
                 ))}
               </tr>
             </thead>
+
+            {/* ---- Filter row (Excel-style, one dropdown per column) ---- */}
+            <thead className="bg-background">
+              <tr>
+                {columns.map((col) => {
+                  const vals = uniqueValuesByColumn[col] ?? []
+                  const current = columnFilters[col] ?? ''
+                  return (
+                    <th key={`filter-${col}`} className="border-b border-border px-1 py-1.5 align-top">
+                      <div className="relative">
+                        <select
+                          value={current}
+                          onChange={(e) => {
+                            const next = { ...columnFilters, [col]: e.target.value }
+                            if (!e.target.value) delete next[col]
+                            setColumnFilters(next)
+                            setVisibleCount(PAGE_SIZE)
+                          }}
+                          className="h-7 w-full cursor-pointer appearance-none rounded-md border border-border bg-card px-1.5 pr-5 text-[11px] outline-none focus:border-ring"
+                        >
+                          <option value="">All</option>
+                          {vals.map((v) => (
+                            <option key={v} value={v}>
+                              {filterLabel(v)}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown
+                          size={11}
+                          className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                        />
+                      </div>
+                    </th>
+                  )
+                })}
+              </tr>
+            </thead>
+
+            {/* ---- Body ---- */}
             <tbody>
-              {filteredRows.map((row, idx) => (
+              {page.map((row, idx) => (
                 <tr key={idx} className="odd:bg-background even:bg-card/40">
-                  {tableColumns.map((column) => (
-                    <td key={column} className="border-b border-border/60 px-3 py-2 text-muted-foreground">
-                      {getDisplayValue(getRowValue(row, column))}
-                    </td>
-                  ))}
+                  {columns.map((col) => {
+                    const isItemCode = col === 'Item_Code'
+                    const val = fmt(row[col])
+                    return (
+                      <td
+                        key={col}
+                        className="whitespace-nowrap border-b border-border/60 px-2 py-1.5 text-xs text-muted-foreground"
+                      >
+                        {isItemCode ? (
+                          <Link
+                            to={`/inventory-explorer/${val}`}
+                            className="font-medium text-primary hover:underline"
+                          >
+                            {val}
+                          </Link>
+                        ) : (
+                          val
+                        )}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* ---------- Show more / summary ---------- */}
+        <div className="mt-3 flex items-center justify-between text-sm">
+          <span className="text-xs text-muted-foreground">
+            {filtered.length === 0
+              ? 'No products match the current filters.'
+              : `Showing ${page.length.toLocaleString()} of ${filtered.length.toLocaleString()} products`}
+          </span>
+          {hasMore && (
+            <button
+              type="button"
+              onClick={handleShowMore}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/60"
+            >
+              Show more ({Math.min(PAGE_SIZE, filtered.length - visibleCount).toLocaleString()} more)
+            </button>
+          )}
         </div>
       </ContentCard>
     </div>

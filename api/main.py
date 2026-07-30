@@ -1,3 +1,10 @@
+"""FastAPI entry point for the ABC-RFM-Risk-ROL pipeline.
+
+Uses the production ``backend.pipeline.run_pipeline`` under the hood.
+Endpoints mirror the original design but return all real 43 columns with
+both ``rol_static`` and ``rol_dynamic`` in every response.
+"""
+
 from __future__ import annotations
 
 from io import BytesIO
@@ -8,10 +15,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from src.pipeline import InventoryPipeline
-from src.utils import ServiceLevelMode, ValidationError
+from backend.pipeline import run_pipeline
 
-app = FastAPI(title="Inventory Analytics API", version="1.0.0")
+app = FastAPI(title="Inventory Analytics API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,39 +30,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_pipeline = InventoryPipeline()
+# ---- In-memory cache (single-session) ----
 _latest_result: pd.DataFrame | None = None
 _latest_excel: bytes | None = None
 _latest_workbook: bytes | None = None
 _latest_sheets: list[str] | None = None
 
 
-def _write_output_excel(final_output: pd.DataFrame) -> bytes:
-    output_buffer = BytesIO()
-    with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
-        final_output.to_excel(writer, index=False, sheet_name="Final_Output")
-    output_buffer.seek(0)
-    return output_buffer.getvalue()
-
-
-def _run_pipeline_from_content(
-    content: bytes,
-    sheet_name: str,
-    service_level_mode: ServiceLevelMode,
-    fixed_service_level: float,
-):
+def _list_sheets(content: bytes) -> list[str]:
+    """Return sheet names from an in-memory Excel file."""
     with NamedTemporaryFile(suffix=".xlsx") as tmp:
         tmp.write(content)
         tmp.flush()
-        sheets = _pipeline.list_sheets(tmp.name)
-        artifacts = _pipeline.run(
-            tmp.name,
-            sheet_name=sheet_name,
-            service_level_mode=service_level_mode,
-            fixed_service_level=fixed_service_level,
-        )
-    return sheets, artifacts
+        xl = pd.ExcelFile(tmp.name)
+        return xl.sheet_names
 
+
+def _run(content: bytes, sheet: str, service_level: float, lead_time: int) -> pd.DataFrame:
+    """Write content to temp file, run pipeline, return DataFrame."""
+    with NamedTemporaryFile(suffix=".xlsx") as tmp:
+        tmp.write(content)
+        tmp.flush()
+        df = run_pipeline(
+            intake_path=tmp.name,
+            intake_sheet=sheet,
+            service_level=service_level,
+            lead_time=lead_time,
+        )
+    return df
+
+
+def _df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Final_Output")
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -65,6 +79,7 @@ def health() -> dict[str, str]:
 
 @app.post("/sheets")
 async def upload_and_list_sheets(file: UploadFile = File(...)) -> list[str]:
+    """Upload a workbook and return its sheet names (cached server-side)."""
     global _latest_workbook, _latest_sheets
 
     if not file.filename.lower().endswith((".xlsx", ".xls")):
@@ -75,24 +90,21 @@ async def upload_and_list_sheets(file: UploadFile = File(...)) -> list[str]:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
     try:
-        with NamedTemporaryFile(suffix=".xlsx") as tmp:
-            tmp.write(content)
-            tmp.flush()
-            sheets = _pipeline.list_sheets(tmp.name)
-
+        sheets = _list_sheets(content)
         _latest_workbook = content
         _latest_sheets = sheets
         return sheets
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to read workbook: {exc}") from exc
 
 
 @app.get("/sheets")
-def list_sheets() -> list[str]:
+def list_cached_sheets() -> list[str]:
+    """Return cached sheet names from a previous upload."""
     if not _latest_sheets:
         raise HTTPException(
             status_code=404,
-            detail="No workbook cached. Upload a workbook via POST /sheets or POST /process with file.",
+            detail="No workbook cached. Upload via POST /sheets first.",
         )
     return _latest_sheets
 
@@ -101,18 +113,24 @@ def list_sheets() -> list[str]:
 async def process(
     file: UploadFile | None = File(default=None),
     sheet_name: str = Form(...),
-    service_level_mode: ServiceLevelMode = Form("fixed"),
-    fixed_service_level: float = Form(85.0),
+    service_level: float = Form(0.85),
+    lead_time: int = Form(4),
 ) -> dict[str, object]:
+    """
+    Run the full ABC-RFM-Risk-ROL pipeline.
+
+    Returns 43 columns per SKU including ``rol_static``, ``rol_dynamic``,
+    ``st_*`` / ``dy_*`` metric groups, and the full hierarchical
+    ABC + RFM + Risk classification.
+    """
     global _latest_result, _latest_excel, _latest_workbook, _latest_sheets
 
-    fixed_service_level_ratio = fixed_service_level / 100 if fixed_service_level > 1 else fixed_service_level
-    if not (0 < fixed_service_level_ratio <= 1):
-        raise HTTPException(
-            status_code=400,
-            detail="fixed_service_level must be in 0..1 or 0..100 scale",
-        )
+    if not (0 < service_level <= 1):
+        raise HTTPException(status_code=400, detail="service_level must be between 0 and 1")
+    if lead_time < 1:
+        raise HTTPException(status_code=400, detail="lead_time must be >= 1")
 
+    # Resolve workbook content
     content: bytes | None = None
     if file is not None:
         if not file.filename.lower().endswith((".xlsx", ".xls")):
@@ -130,33 +148,26 @@ async def process(
             )
 
     try:
-        sheets, artifacts = _run_pipeline_from_content(
-            content=content,
-            sheet_name=sheet_name,
-            service_level_mode=service_level_mode,
-            fixed_service_level=fixed_service_level_ratio,
-        )
-        _latest_sheets = sheets
-
-        _latest_result = artifacts.final_output.copy()
-        _latest_excel = _write_output_excel(artifacts.final_output)
+        df = _run(content, sheet_name, service_level, lead_time)
+        _latest_sheets = [sheet_name]
+        _latest_result = df.copy()
+        _latest_excel = _df_to_excel_bytes(df)
 
         return {
-            "sheet_name": sheet_name,
-            "service_level_mode": service_level_mode,
-            "fixed_service_level": fixed_service_level_ratio,
-            "rows": int(len(artifacts.final_output)),
-            "columns": list(artifacts.final_output.columns),
-            "data": artifacts.final_output.to_dict(orient="records"),
+            "sheetName": sheet_name,
+            "serviceLevel": service_level,
+            "leadTime": lead_time,
+            "rows": int(len(df)),
+            "columns": list(df.columns),
+            "data": df.to_dict(orient="records"),
         }
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/product/{item_code}")
 def product(item_code: str) -> dict[str, object]:
+    """Return a single product's full row by Item_Code."""
     if _latest_result is None:
         raise HTTPException(status_code=404, detail="No processed dataset found. Call /process first")
 
@@ -169,6 +180,7 @@ def product(item_code: str) -> dict[str, object]:
 
 @app.get("/download")
 def download() -> StreamingResponse:
+    """Download the latest pipeline result as an Excel file."""
     if _latest_excel is None:
         raise HTTPException(status_code=404, detail="No generated file found. Call /process first")
 

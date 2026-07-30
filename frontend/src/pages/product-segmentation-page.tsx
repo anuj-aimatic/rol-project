@@ -4,118 +4,64 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Legend,
+  Cell,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
-  Cell,
 } from 'recharts'
 
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
 import { cn } from '@/lib/utils'
-import { useProcessedData } from '@/services/state/processed-data-context'
+import { countBy, useProcessedData } from '@/services/state/processed-data-context'
 
-const tabs = ['ABC', 'RF', 'ABC-RF'] as const
-
-type Tab = (typeof tabs)[number]
-
-interface SegmentSummary {
-  segment: string
-  count: number
-  totalQty: number
-  pct: number
-}
-
-interface ProductPoint {
-  itemCode: string
-  segment: string
-  totalQty: number
-  rol: number
-}
-
-const CHART_COLORS = ['#2563eb', '#0ea5e9', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#9333ea']
-
-function toNumber(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  return 0
-}
+const TABS = ['ABC', 'RFM', 'Risk'] as const
+type Tab = (typeof TABS)[number]
+const COLORS = ['#2563eb', '#0ea5e9', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2']
 
 export function ProductSegmentationPage() {
-  const { dataset } = useProcessedData()
-  const [activeTab, setActiveTab] = useState<Tab>('ABC')
+  const { result } = useProcessedData()
+  const [tab, setTab] = useState<Tab>('ABC')
+
+  const dist = useMemo(() => {
+    if (!result) return null
+    const field =
+      tab === 'ABC' ? 'ABC_Class' : tab === 'RFM' ? 'RFM_Category' : 'Risk_Category'
+    const raw = countBy(result.data, field)
+    return Object.entries(raw)
+      .map(([k, v]) => ({ name: k, count: v }))
+      .sort((a, b) => b.count - a.count)
+  }, [result, tab])
 
   const subtitle = useMemo(() => {
-    if (activeTab === 'ABC') return 'Demand contribution segmentation and Pareto structure.'
-    if (activeTab === 'RF') return 'Recency-frequency behavioral segmentation.'
-    return 'Combined segmentation for inventory policy execution.'
-  }, [activeTab])
+    if (tab === 'ABC') return 'Pareto-based demand contribution segmentation.'
+    if (tab === 'RFM') return 'Recency-Frequency-Monetary behavioral classification.'
+    return 'Customer concentration and business risk categorization.'
+  }, [tab])
 
-  const segmentAnalytics = useMemo(() => {
-    if (!dataset) {
-      return {
-        summaries: [] as SegmentSummary[],
-        topProducts: [] as ProductPoint[],
-      }
+  /* ----- cross-tabulation (ABC × RFM) for the combined view ----- */
+  const crossTab = useMemo(() => {
+    if (!result) return []
+    const map = new Map<string, number>()
+    for (const row of result.data) {
+      const key = `${String(row.ABC_Class ?? '?')} x ${String(row.RFM_Category ?? '?')}`
+      map.set(key, (map.get(key) ?? 0) + 1)
     }
-
-    const field =
-      activeTab === 'ABC' ? 'ABC_Class' : activeTab === 'RF' ? 'RF_Category' : 'ABC_RF_Segment'
-
-    const counts = new Map<string, number>()
-    const qtyTotals = new Map<string, number>()
-    const products: ProductPoint[] = []
-
-    for (const row of dataset.data) {
-      const raw = row[field]
-      const key = raw === null || raw === undefined || raw === '' ? 'Uncategorized' : String(raw)
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-      qtyTotals.set(key, (qtyTotals.get(key) ?? 0) + toNumber(row.Total_Qty))
-
-      products.push({
-        itemCode: String(row.Item_Code ?? 'Unknown'),
-        segment: key,
-        totalQty: toNumber(row.Total_Qty),
-        rol: toNumber(activeTab === 'ABC-RF' ? row.ROL_Selected : (row.ROL_Client ?? row.ROL_Selected)),
-      })
-    }
-
-    const totalProducts = dataset.rows || 1
-    const summaries = [...counts.entries()]
-      .map(([segment, count]) => ({
-        segment,
-        count,
-        totalQty: qtyTotals.get(segment) ?? 0,
-        pct: (count / totalProducts) * 100,
-      }))
+    return [...map.entries()]
+      .map(([k, v]) => ({ name: k, count: v }))
       .sort((a, b) => b.count - a.count)
+  }, [result])
 
-    const topSegments = new Set(summaries.slice(0, 3).map((s) => s.segment))
-    const topProducts = products
-      .filter((p) => topSegments.has(p.segment))
-      .sort((a, b) => b.totalQty - a.totalQty)
-      .slice(0, 12)
-
-    return { summaries, topProducts }
-  }, [activeTab, dataset])
-
-  if (!dataset) {
+  if (!result) {
     return (
       <div>
-        <PageHeader
-          title="Product Segmentation"
-          subtitle="Unified segmentation workspace for ABC, RF, and combined ABC-RF logic."
-        />
-        <ContentCard title="No Segmentation Data" description="Run the pipeline first from Overview.">
+        <PageHeader title="Product Segmentation" subtitle="ABC, RFM, and Risk distribution analysis." />
+        <ContentCard title="No Data" description="Run the pipeline first.">
           <p className="text-sm text-muted-foreground">
-            Segmentation insights are generated by Run Analysis. Open <Link to="/overview" className="text-primary underline">Overview</Link> to process a workbook.
+            Open <Link to="/overview" className="text-primary underline">Overview</Link> to process data.
           </p>
         </ContentCard>
       </div>
@@ -126,59 +72,57 @@ export function ProductSegmentationPage() {
     <div>
       <PageHeader
         title="Product Segmentation"
-        subtitle="Unified segmentation workspace for ABC, RF, and combined ABC-RF logic."
+        subtitle="Unified segmentation workspace for ABC, RFM, and Risk logic."
       />
 
+      {/* Tabs */}
       <div className="mb-4 inline-flex rounded-xl border border-border bg-card p-1">
-        {tabs.map((tab) => (
+        {TABS.map((t) => (
           <button
-            key={tab}
+            key={t}
             type="button"
-            onClick={() => setActiveTab(tab)}
+            onClick={() => setTab(t)}
             className={cn(
               'rounded-lg px-4 py-2 text-sm transition-colors',
-              tab === activeTab
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground',
+              t === tab ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            {tab}
+            {t}
           </button>
         ))}
       </div>
 
-      <ContentCard title={activeTab + ' Analysis'} description={subtitle}>
+      {/* Distribution charts */}
+      <ContentCard title={`${tab} Distribution`} description={subtitle}>
         <div className="grid gap-4 xl:grid-cols-2">
-          <div className="h-80 rounded-xl border border-border bg-background/60 p-2">
+          <div className="h-72 rounded-xl border border-border bg-background/60 p-2">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={segmentAnalytics.summaries} margin={{ top: 16, right: 12, left: 0, bottom: 36 }}>
+              <BarChart data={dist ?? []} margin={{ top: 16, right: 12, left: 0, bottom: 36 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="segment" angle={-20} textAnchor="end" height={56} interval={0} />
+                <XAxis dataKey="name" angle={-20} textAnchor="end" height={56} interval={0} />
                 <YAxis />
                 <Tooltip />
-                <Legend />
                 <Bar dataKey="count" name="Products" fill="#2563eb" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="totalQty" name="Total Qty" fill="#16a34a" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          <div className="h-80 rounded-xl border border-border bg-background/60 p-2">
+          <div className="h-72 rounded-xl border border-border bg-background/60 p-2">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={segmentAnalytics.summaries}
+                  data={dist ?? []}
                   dataKey="count"
-                  nameKey="segment"
+                  nameKey="name"
                   cx="50%"
                   cy="50%"
-                  outerRadius={110}
+                  outerRadius={100}
                   label={({ name, percent }: { name?: string; percent?: number }) =>
-                    `${name ?? ''}: ${((percent ?? 0) * 100).toFixed(1)}%`
+                    `${name}: ${((percent ?? 0) * 100).toFixed(1)}%`
                   }
                 >
-                  {segmentAnalytics.summaries.map((entry, idx) => (
-                    <Cell key={entry.segment} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
+                  {(dist ?? []).map((entry, idx) => (
+                    <Cell key={entry.name} fill={COLORS[idx % COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip />
@@ -186,33 +130,35 @@ export function ProductSegmentationPage() {
             </ResponsiveContainer>
           </div>
         </div>
+      </ContentCard>
 
-        <div className="mt-4 rounded-xl border border-border bg-background/60 p-3">
-          <h3 className="mb-2 text-sm font-semibold text-foreground">Top Products To Inspect (by quantity in dominant segments)</h3>
+      {/* ABC × RFM cross-tabulation */}
+      {tab === 'ABC' && (
+        <ContentCard title="ABC × RFM Cross-Tab" description="Combined segmentation matrix — all products by ABC class and RFM category." className="mt-4">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-2">Item Code</th>
-                  <th className="px-2 py-2">Segment</th>
-                  <th className="px-2 py-2">Total Qty</th>
-                  <th className="px-2 py-2">ROL</th>
+                  <th className="px-3 py-2">Segmentation</th>
+                  <th className="px-3 py-2">Products</th>
+                  <th className="px-3 py-2">% of Total</th>
                 </tr>
               </thead>
               <tbody>
-                {segmentAnalytics.topProducts.map((product) => (
-                  <tr key={product.itemCode + product.segment} className="border-b border-border/60">
-                    <td className="px-2 py-2 text-foreground">{product.itemCode}</td>
-                    <td className="px-2 py-2 text-muted-foreground">{product.segment}</td>
-                    <td className="px-2 py-2 text-muted-foreground">{product.totalQty.toLocaleString()}</td>
-                    <td className="px-2 py-2 text-muted-foreground">{product.rol.toLocaleString()}</td>
+                {crossTab.map((row) => (
+                  <tr key={row.name} className="border-b border-border/60">
+                    <td className="px-3 py-2 text-foreground">{row.name}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{row.count.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {((row.count / result.rows) * 100).toFixed(1)}%
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      </ContentCard>
+        </ContentCard>
+      )}
     </div>
   )
 }
