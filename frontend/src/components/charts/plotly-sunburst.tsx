@@ -48,6 +48,15 @@ function buildSunburstTree(rows: InventoryRecord[]) {
   return { ids, labels, parents, values, customdata }
 }
 
+// Custom colorscale matching #2563eb (Tailwind blue-600)
+const BLUE_COLORSCALE = [
+  [0, '#dbeafe'],   // blue-100 — light
+  [0.3, '#93c5fd'], // blue-300
+  [0.6, '#3b82f6'], // blue-500
+  [0.8, '#2563eb'], // blue-600 — primary
+  [1, '#1d4ed8'],   // blue-700 — dark
+]
+
 let plotlyInstance: typeof import('plotly.js-dist-min') | null = null
 
 export function PlotlySunburst({ data }: PlotlySunburstProps) {
@@ -75,6 +84,8 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
         values: tree.values,
         branchvalues: 'total',
         customdata: tree.customdata,
+        textinfo: 'label+percent root',
+        texttemplate: '<b>%{label}</b><br>%{percentRoot:.1%}',
         hovertemplate:
           '<b>%{label}</b><br>' +
           'Amount: %{value:,.0f}<br>' +
@@ -82,7 +93,7 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
           '<extra></extra>',
         marker: {
           colors: tree.customdata,
-          colorscale: 'Blues',
+          colorscale: BLUE_COLORSCALE,
           cmin: 0,
           cmax: 100,
           showscale: true,
@@ -93,12 +104,7 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
       const layout: Record<string, unknown> = {
         margin: { t: 0, r: 0, b: 0, l: 0 },
         paper_bgcolor: 'transparent',
-        font: { size: 11 },
-        sunburstcolorway: [
-          '#1e3a8a', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa',
-          '#93c5fd', '#bfdbfe', '#dbeafe', '#eff6ff',
-        ],
-        extendsunburstcolorway: true,
+        font: { size: 10 },
       }
 
       const config: Record<string, unknown> = {

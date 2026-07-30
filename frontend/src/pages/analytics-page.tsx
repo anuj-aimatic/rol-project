@@ -87,6 +87,11 @@ export function AnalyticsPage() {
     )
   }
 
+  const maxCount = Math.max(
+    ...crossTab.rows.flatMap((rr) => rr.cols.map((cc) => cc.count)),
+    1,
+  )
+
   return (
     <div>
       <PageHeader
@@ -94,8 +99,8 @@ export function AnalyticsPage() {
         subtitle="Portfolio-level analysis with real pipeline data."
       />
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        {/* Risk Breakdown */}
+      {/* Row 1: Risk Breakdown + ABC × RFM Matrix side by side */}
+      <div className="mb-4 grid gap-4 xl:grid-cols-2">
         <ContentCard title="Risk Breakdown" description="Products by Risk_Category.">
           <div className="h-64 rounded-xl border border-border bg-background/60 p-2">
             <ResponsiveContainer width="100%" height="100%">
@@ -121,47 +126,6 @@ export function AnalyticsPage() {
           </div>
         </ContentCard>
 
-        {/* Top Static ROL */}
-        <ContentCard title="Top 15 Products by Static ROL" description="Highest static reorder levels.">
-          <div className="space-y-1">
-            {topStatic.map((row, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between rounded-lg border border-border bg-background/70 px-3 py-1.5 text-sm"
-              >
-                <span className="text-foreground">
-                  {String(row.Item_Code ?? '—')}
-                </span>
-                <span className="font-medium text-primary">
-                  {toNumeric(row.rol_static).toFixed(0)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </ContentCard>
-      </div>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        {/* Top Dynamic ROL */}
-        <ContentCard title="Top 15 Products by Dynamic ROL" description="Highest dynamic reorder levels.">
-          <div className="space-y-1">
-            {topDynamic.map((row, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between rounded-lg border border-border bg-background/70 px-3 py-1.5 text-sm"
-              >
-                <span className="text-foreground">
-                  {String(row.Item_Code ?? '—')}
-                </span>
-                <span className="font-medium text-primary">
-                  {toNumeric(row.rol_dynamic).toFixed(0)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </ContentCard>
-
-        {/* ABC × RFM Cross-tab */}
         <ContentCard title="ABC × RFM Matrix" description="Product count per combined segment.">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -178,10 +142,6 @@ export function AnalyticsPage() {
                   <tr key={r.rfm} className="border-b border-border/60">
                     <td className="px-2 py-1.5 font-medium text-foreground">{r.rfm}</td>
                     {r.cols.map((c) => {
-                      const maxCount = Math.max(
-                        ...crossTab.rows.flatMap((rr) => rr.cols.map((cc) => cc.count)),
-                        1,
-                      )
                       const intensity = c.count / maxCount
                       return (
                         <td
@@ -199,6 +159,45 @@ export function AnalyticsPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </ContentCard>
+      </div>
+
+      {/* Row 2: Top 15 Static ROL + Top 15 Dynamic ROL side by side */}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <ContentCard title="Top 15 Products by Static ROL" description="Highest static reorder levels.">
+          <div className="space-y-1 max-h-[480px] overflow-y-auto pr-1">
+            {topStatic.map((row, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between rounded-lg border border-border bg-background/70 px-3 py-1.5 text-sm"
+              >
+                <span className="text-foreground truncate mr-2">
+                  {String(row.Item_Code ?? '—')}
+                </span>
+                <span className="shrink-0 font-medium text-primary">
+                  {toNumeric(row.rol_static).toFixed(0)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </ContentCard>
+
+        <ContentCard title="Top 15 Products by Dynamic ROL" description="Highest dynamic reorder levels.">
+          <div className="space-y-1 max-h-[480px] overflow-y-auto pr-1">
+            {topDynamic.map((row, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between rounded-lg border border-border bg-background/70 px-3 py-1.5 text-sm"
+              >
+                <span className="text-foreground truncate mr-2">
+                  {String(row.Item_Code ?? '—')}
+                </span>
+                <span className="shrink-0 font-medium text-primary">
+                  {toNumeric(row.rol_dynamic).toFixed(0)}
+                </span>
+              </div>
+            ))}
           </div>
         </ContentCard>
       </div>

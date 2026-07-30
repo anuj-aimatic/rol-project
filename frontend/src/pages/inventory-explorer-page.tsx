@@ -1,12 +1,24 @@
-import { ChevronDown, FilterX, Search } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
+  FilterX,
+  Search,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
 import { useProcessedData } from '@/services/state/processed-data-context'
 
 const PAGE_SIZE = 20
+
+const MONETARY_COLS = new Set(['Monetary', 'ABC_Quantum'])
 
 const KEY_COLUMNS = [
   'Item_Code',
@@ -72,66 +84,276 @@ const COL_LABELS: Record<string, string> = {
   'Cumulative Contribution (%)': 'Cumul %',
 }
 
-function fmt(v: unknown): string {
+/* ---------- Formatting helpers ---------- */
+
+/** Format a value for display: ₹ for monetary cols, commas, 2-decimal rounding. */
+function fmt(v: unknown, col?: string): string {
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) return '—'
-    if (Number.isInteger(v)) return v.toLocaleString()
-    return v.toFixed(2)
+    const rounded = Number.isInteger(v) ? v : Math.round(v * 100) / 100
+    const prefix = col && MONETARY_COLS.has(col) ? '₹' : ''
+    return prefix + rounded.toLocaleString('en-IN', {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
+    })
   }
   return String(v)
 }
 
-/** Return a short display value for filter dropdowns (truncate long strings). */
-function filterLabel(v: unknown): string {
-  const s = fmt(v)
-  return s.length > 28 ? s.slice(0, 26) + '…' : s
+/** Numeric sort key for a row / column. */
+function sortVal(r: Record<string, unknown>, col: string): number {
+  const v = r[col]
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  return NaN
 }
 
-/* ---------- component ---------- */
+/* ---------- Sort direction type ---------- */
+type SortDir = 'asc' | 'desc' | null
+
+/* ---------- Popover filter component ---------- */
+
+function ColumnFilterPopover({
+  col,
+  values,
+  selected,
+  onToggle,
+  onClose,
+  anchorEl,
+}: {
+  col: string
+  values: string[]
+  selected: Set<string>
+  onToggle: (v: string) => void
+  onClose: () => void
+  anchorEl: HTMLElement | null
+}) {
+  const popRef = useRef<HTMLDivElement>(null)
+  const [search, setSearch] = useState('')
+
+  // Close on click outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    // Delay so the current click doesn't immediately close
+    const id = setTimeout(() => document.addEventListener('click', handleClick), 0)
+    return () => {
+      clearTimeout(id)
+      document.removeEventListener('click', handleClick)
+    }
+  }, [onClose])
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return values
+    const q = search.trim().toLowerCase()
+    return values.filter((v) => v.toLowerCase().includes(q))
+  }, [values, search])
+
+  const allSelected = values.length > 0 && values.every((v) => selected.has(v))
+  const noneSelected = selected.size === 0
+
+  // Position relative to anchor
+  const rect = anchorEl?.getBoundingClientRect()
+
+  const content = (
+    <div
+      ref={popRef}
+      className="w-56 rounded-xl border border-border bg-card shadow-2xl"
+      style={{
+        position: 'fixed',
+        top: rect ? rect.bottom + 4 : 0,
+        left: rect ? Math.min(rect.left, window.innerWidth - 260) : 0,
+        zIndex: 9999,
+        pointerEvents: 'auto',
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <span className="text-xs font-semibold uppercase text-muted-foreground">
+          {COL_LABELS[col] ?? col}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      {/* Search */}
+      <div className="border-b border-border px-2 py-1.5">
+        <label className="relative block">
+          <Search
+            size={12}
+            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+          />
+          <input
+            type="text"
+            placeholder="Search…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-7 w-full rounded-md border border-border bg-background pl-6 pr-2 text-xs outline-none focus:border-ring"
+          />
+        </label>
+      </div>
+
+      {/* Select All / Clear */}
+      <div className="flex items-center justify-between border-b border-border px-2 py-1">
+        <button
+          type="button"
+          onClick={() => {
+            if (allSelected) {
+              values.forEach((v) => {
+                if (selected.has(v)) onToggle(v)
+              })
+            } else {
+              values.forEach((v) => {
+                if (!selected.has(v)) onToggle(v)
+              })
+            }
+          }}
+          className="text-[11px] font-medium text-primary hover:underline"
+        >
+          {allSelected ? 'Clear All' : 'Select All'}
+        </button>
+        <span className="text-[10px] text-muted-foreground">
+          {selected.size} / {values.length}
+        </span>
+      </div>
+
+      {/* Checkbox list */}
+      <div className="max-h-48 overflow-y-auto px-1 py-1">
+        {filtered.length === 0 ? (
+          <p className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+            No matches
+          </p>
+        ) : (
+          filtered.map((v) => {
+            const checked = selected.has(v)
+            return (
+              <label
+                key={v}
+                className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs hover:bg-muted/60 ${
+                  checked ? 'bg-primary/5 font-medium text-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                    checked
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background'
+                  }`}
+                >
+                  {checked && <Check size={10} strokeWidth={3} />}
+                </span>
+                <span className="truncate">{v}</span>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggle(v)}
+                  className="sr-only"
+                />
+              </label>
+            )
+          })
+        )}
+      </div>
+
+      {/* Footer: show active count */}
+      {!noneSelected && (
+        <div className="border-t border-border px-3 py-1.5">
+          <p className="text-[10px] text-muted-foreground">
+            {selected.size} value{selected.size > 1 ? 's' : ''} selected
+          </p>
+        </div>
+      )}
+    </div>
+  )
+
+  // Render via portal to body to avoid table overflow clipping
+  return createPortal(content, document.body)
+}
+
+/* ---------- Main page component ---------- */
 
 export function InventoryExplorerPage() {
   const { result } = useProcessedData()
   const [searchTerm, setSearchTerm] = useState('')
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
+  // Multi-select filters: column -> Set of selected display strings
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({})
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+
+  // Sort state
+  const [sortCol, setSortCol] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>(null)
+
+  // Popover state
+  const [openPopover, setOpenPopover] = useState<string | null>(null)
+  const popoverAnchorRef = useRef<Record<string, HTMLElement | null>>({})
+
   // ---------- columns ----------
   const columns = useMemo(() => {
     if (!result) return []
     return KEY_COLUMNS.filter((c) => result.columns.includes(c))
   }, [result])
 
-  // ---------- unique values per column ----------
+  // ---------- unique values per column (formatted) ----------
   const uniqueValuesByColumn = useMemo(() => {
     if (!result) return {} as Record<string, string[]>
     const map: Record<string, string[]> = {}
     for (const col of columns) {
       const set = new Set<string>()
       for (const row of result.data) {
-        const v = fmt(row[col])
+        const v = fmt(row[col], col)
         if (v && v !== '—') set.add(v)
       }
       const sorted = [...set].sort((a, b) => {
-        const na = Number(a), nb = Number(b)
+        // Try numeric sort
+        const na = parseFloat(a.replace(/[₹,]/g, ''))
+        const nb = parseFloat(b.replace(/[₹,]/g, ''))
         if (!isNaN(na) && !isNaN(nb)) return na - nb
         return a.localeCompare(b)
       })
-      map[col] = sorted.slice(0, 100) // cap at 100 unique values per column
+      map[col] = sorted.slice(0, 100)
     }
     return map
   }, [result, columns])
 
-  // ---------- filtered rows ----------
+  // ---------- sort + filter rows ----------
   const filtered = useMemo(() => {
     if (!result) return []
-    let rows = result.data
+    let rows = [...result.data]
 
-    // Apply per-column filters
-    const activeFilters = Object.entries(columnFilters).filter(([, v]) => v)
+    // Apply per-column multi-select filters
+    const activeFilters = Object.entries(columnFilters).filter(
+      ([, set]) => set.size > 0,
+    )
     if (activeFilters.length > 0) {
       rows = rows.filter((r) =>
-        activeFilters.every(([col, val]) => String(r[col] ?? '') === val),
+        activeFilters.every(([col, selected]) => {
+          const displayVal = fmt(r[col], col)
+          return selected.has(displayVal)
+        }),
       )
+    }
+
+    // Apply sort
+    if (sortCol && sortDir) {
+      rows.sort((a, b) => {
+        const va = sortVal(a, sortCol)
+        const vb = sortVal(b, sortCol)
+        if (!isNaN(va) && !isNaN(vb)) {
+          return sortDir === 'asc' ? va - vb : vb - va
+        }
+        // Fall back to string comparison
+        const sa = String(a[sortCol] ?? '')
+        const sb = String(b[sortCol] ?? '')
+        return sortDir === 'asc' ? sa.localeCompare(sb) : sb.localeCompare(sa)
+      })
     }
 
     // Apply global search
@@ -143,32 +365,87 @@ export function InventoryExplorerPage() {
     }
 
     return rows
-  }, [result, columnFilters, searchTerm, columns])
+  }, [result, columnFilters, sortCol, sortDir, searchTerm, columns])
 
   // ---------- paginated slice ----------
   const page = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
   const hasMore = visibleCount < filtered.length
 
-  const handleShowMore = () => {
-    setVisibleCount((prev) => prev + PAGE_SIZE)
-  }
+  const handleShowMore = () => setVisibleCount((prev) => prev + PAGE_SIZE)
 
-  const activeFilterCount = Object.values(columnFilters).filter(Boolean).length
+  // ---------- sort handler ----------
+  const handleSort = useCallback(
+    (col: string) => {
+      setSortCol((prev) => {
+        if (prev !== col) return col
+        return col // always keep col
+      })
+      setSortDir((prev) => {
+        if (sortCol !== col) return 'asc'
+        if (prev === null) return 'asc'
+        if (prev === 'asc') return 'desc'
+        return null
+      })
+      setVisibleCount(PAGE_SIZE)
+    },
+    [sortCol],
+  )
+
+  // ---------- filter handlers ----------
+  const toggleFilter = useCallback((col: string, value: string) => {
+    setColumnFilters((prev) => {
+      const set = new Set(prev[col] ?? [])
+      if (set.has(value)) set.delete(value)
+      else set.add(value)
+      const next = { ...prev, [col]: set }
+      if (set.size === 0) delete next[col]
+      return next
+    })
+    setVisibleCount(PAGE_SIZE)
+  }, [])
+
+  const activeFilterCount = useMemo(
+    () =>
+      Object.values(columnFilters).reduce((sum, s) => sum + s.size, 0),
+    [columnFilters],
+  )
 
   const clearAllFilters = () => {
     setColumnFilters({})
     setSearchTerm('')
+    setSortCol(null)
+    setSortDir(null)
     setVisibleCount(PAGE_SIZE)
+    setOpenPopover(null)
+  }
+
+  // ---------- sort icon helper ----------
+  function sortIcon(col: string) {
+    if (sortCol !== col || sortDir === null) {
+      return <ArrowUpDown size={11} className="ml-1 shrink-0 opacity-30" />
+    }
+    return sortDir === 'asc' ? (
+      <ArrowUp size={11} className="ml-1 shrink-0 text-primary" />
+    ) : (
+      <ArrowDown size={11} className="ml-1 shrink-0 text-primary" />
+    )
   }
 
   // ---------- render ----------
   if (!result) {
     return (
       <div>
-        <PageHeader title="Inventory Explorer" subtitle="Browse all products with full pipeline metrics." />
+        <PageHeader
+          title="Inventory Explorer"
+          subtitle="Browse all products with full pipeline metrics."
+        />
         <ContentCard title="No Data" description="Run the pipeline first from Overview.">
           <p className="text-sm text-muted-foreground">
-            Go to <Link to="/overview" className="text-primary underline">Overview</Link> and run analysis.
+            Go to{' '}
+            <Link to="/overview" className="text-primary underline">
+              Overview
+            </Link>{' '}
+            and run analysis.
           </p>
         </ContentCard>
       </div>
@@ -184,7 +461,7 @@ export function InventoryExplorerPage() {
 
       <ContentCard
         title="Product Table"
-        description="Each column has its own filter dropdown (like Excel). Showing first 20 by default."
+        description="Click column headers to sort · Click the filter icon to open per-column multi-select filters."
       >
         {/* ---------- Toolbar ---------- */}
         <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -208,8 +485,11 @@ export function InventoryExplorerPage() {
 
           {/* Filter stats */}
           <span className="text-xs text-muted-foreground">
-            {activeFilterCount > 0 ? `${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''} active · ` : ''}
-            Showing {page.length.toLocaleString()} of {filtered.length.toLocaleString()} products
+            {activeFilterCount > 0
+              ? `${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''} active · `
+              : ''}
+            Showing {page.length.toLocaleString()} of {filtered.length.toLocaleString()}{' '}
+            products
           </span>
 
           {/* Clear all */}
@@ -228,51 +508,60 @@ export function InventoryExplorerPage() {
         {/* ---------- Scrollable table ---------- */}
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="min-w-full border-collapse text-sm">
-            {/* ---- Header row ---- */}
+            {/* ---- Header row (sortable + filter icon) ---- */}
             <thead className="bg-muted/60">
               <tr>
-                {columns.map((col) => (
-                  <th
-                    key={col}
-                    className="whitespace-nowrap border-b border-border px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                  >
-                    {COL_LABELS[col] ?? col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-
-            {/* ---- Filter row (Excel-style, one dropdown per column) ---- */}
-            <thead className="bg-background">
-              <tr>
                 {columns.map((col) => {
-                  const vals = uniqueValuesByColumn[col] ?? []
-                  const current = columnFilters[col] ?? ''
+                  const isSorted = sortCol === col && sortDir !== null
                   return (
-                    <th key={`filter-${col}`} className="border-b border-border px-1 py-1.5 align-top">
-                      <div className="relative">
-                        <select
-                          value={current}
-                          onChange={(e) => {
-                            const next = { ...columnFilters, [col]: e.target.value }
-                            if (!e.target.value) delete next[col]
-                            setColumnFilters(next)
-                            setVisibleCount(PAGE_SIZE)
-                          }}
-                          className="h-7 w-full cursor-pointer appearance-none rounded-md border border-border bg-card px-1.5 pr-5 text-[11px] outline-none focus:border-ring"
+                    <th
+                      key={col}
+                      className="whitespace-nowrap border-b border-border px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
+                      <div className="flex items-center gap-0.5">
+                        {/* Sortable label */}
+                        <button
+                          type="button"
+                          onClick={() => handleSort(col)}
+                          className={`flex items-center gap-0.5 rounded px-1 py-0.5 transition-colors hover:bg-muted/80 ${
+                            isSorted ? 'text-foreground' : ''
+                          }`}
                         >
-                          <option value="">All</option>
-                          {vals.map((v) => (
-                            <option key={v} value={v}>
-                              {filterLabel(v)}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown
-                          size={11}
-                          className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-                        />
+                          {COL_LABELS[col] ?? col}
+                          {sortIcon(col)}
+                        </button>
+
+                        {/* Filter icon trigger */}
+                        <button
+                          type="button"
+                          ref={(el) => {
+                            popoverAnchorRef.current[col] = el
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setOpenPopover((prev) => (prev === col ? null : col))
+                          }}
+                          className={`ml-auto rounded p-0.5 transition-colors hover:bg-muted/80 ${
+                            (columnFilters[col]?.size ?? 0) > 0
+                              ? 'text-primary'
+                              : 'text-muted-foreground'
+                          }`}
+                        >
+                          <SlidersHorizontal size={11} />
+                        </button>
                       </div>
+
+                      {/* Popover */}
+                      {openPopover === col && (
+                        <ColumnFilterPopover
+                          col={col}
+                          values={uniqueValuesByColumn[col] ?? []}
+                          selected={columnFilters[col] ?? new Set()}
+                          onToggle={(v) => toggleFilter(col, v)}
+                          onClose={() => setOpenPopover(null)}
+                          anchorEl={popoverAnchorRef.current[col]}
+                        />
+                      )}
                     </th>
                   )
                 })}
@@ -282,10 +571,13 @@ export function InventoryExplorerPage() {
             {/* ---- Body ---- */}
             <tbody>
               {page.map((row, idx) => (
-                <tr key={idx} className="odd:bg-background even:bg-card/40">
+                <tr
+                  key={idx}
+                  className="odd:bg-background even:bg-card/40 transition-colors hover:bg-muted/20"
+                >
                   {columns.map((col) => {
                     const isItemCode = col === 'Item_Code'
-                    const val = fmt(row[col])
+                    const val = fmt(row[col], col)
                     return (
                       <td
                         key={col}
@@ -306,27 +598,39 @@ export function InventoryExplorerPage() {
                   })}
                 </tr>
               ))}
+              {page.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={columns.length}
+                    className="px-4 py-8 text-center text-sm text-muted-foreground"
+                  >
+                    No products match the current filters.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
 
         {/* ---------- Show more / summary ---------- */}
-        <div className="mt-3 flex items-center justify-between text-sm">
-          <span className="text-xs text-muted-foreground">
-            {filtered.length === 0
-              ? 'No products match the current filters.'
-              : `Showing ${page.length.toLocaleString()} of ${filtered.length.toLocaleString()} products`}
-          </span>
-          {hasMore && (
-            <button
-              type="button"
-              onClick={handleShowMore}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/60"
-            >
-              Show more ({Math.min(PAGE_SIZE, filtered.length - visibleCount).toLocaleString()} more)
-            </button>
-          )}
-        </div>
+        {filtered.length > 0 && (
+          <div className="mt-3 flex items-center justify-between text-sm">
+            <span className="text-xs text-muted-foreground">
+              Showing {page.length.toLocaleString()} of{' '}
+              {filtered.length.toLocaleString()} products
+            </span>
+            {hasMore && (
+              <button
+                type="button"
+                onClick={handleShowMore}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/60"
+              >
+                Show more (
+                {Math.min(PAGE_SIZE, filtered.length - visibleCount).toLocaleString()} more)
+              </button>
+            )}
+          </div>
+        )}
       </ContentCard>
     </div>
   )

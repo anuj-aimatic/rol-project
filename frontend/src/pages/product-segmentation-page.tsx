@@ -16,6 +16,7 @@ import {
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
 import { PlotlySunburst } from '@/components/charts/plotly-sunburst'
+import { ParetoChart, RfmScatterChart, RolScatterChart } from '@/components/charts/analysis-charts'
 import { cn } from '@/lib/utils'
 import { countBy, useProcessedData } from '@/services/state/processed-data-context'
 
@@ -28,7 +29,6 @@ export function ProductSegmentationPage() {
   const { result } = useProcessedData()
   const [tab, setTab] = useState<Tab>('ABC')
 
-  /* ----- distribution chart data ----- */
   const distData = (() => {
     if (!result) return []
     const field =
@@ -46,7 +46,6 @@ export function ProductSegmentationPage() {
         ? 'Recency-Frequency-Monetary behavioral classification.'
         : 'Customer concentration risk categorization.'
 
-  /* ----- cross-tab (ABC × RFM) ----- */
   const crossTab = (() => {
     if (!result) return []
     const map = new Map<string, number>()
@@ -73,28 +72,25 @@ export function ProductSegmentationPage() {
   }
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         title="Product Segmentation"
-        subtitle="Hierarchical product breakdown, classification distributions, and advanced analytics."
+        subtitle="Hierarchical sunburst, classification distributions, and advanced deep-dive analytics."
       />
 
-      {/* ============ Row 1: Sunburst (full width) ============ */}
-      <div className="mb-4">
-        <ContentCard
-          title="Product Hierarchy Sunburst"
-          description="Item_Category_Code → Product Group Code → Product_SubGroup_Code. Sized by order amount, colored by Contribution %."
-          className="overflow-hidden"
-        >
-          <div className="h-[500px]">
-            <PlotlySunburst data={result.data} />
-          </div>
-        </ContentCard>
-      </div>
+      {/* ============ 1. Sunburst ============ */}
+      <ContentCard
+        title="Product Hierarchy Sunburst"
+        description="Item_Category_Code → Product Group Code → Product_SubGroup_Code. Sized by order amount, colored by Contribution %."
+        className="overflow-hidden"
+      >
+        <div className="h-[520px]">
+          <PlotlySunburst data={result.data} />
+        </div>
+      </ContentCard>
 
-      {/* ============ Row 2: Distribution charts ============ */}
-      <div className="mb-4 grid gap-4 xl:grid-cols-2">
-        {/* Bar chart with tabs */}
+      {/* ============ 2. Distribution Overview ============ */}
+      <div className="grid gap-6 xl:grid-cols-2">
         <ContentCard title={`${tab} Distribution`} description={subtitle}>
           <div className="mb-3 inline-flex rounded-lg border border-border bg-background p-0.5">
             {TABS.map((t) => (
@@ -103,7 +99,7 @@ export function ProductSegmentationPage() {
                 type="button"
                 onClick={() => setTab(t)}
                 className={cn(
-                  'rounded-md px-3 py-1 text-xs transition-colors',
+                  'rounded-md px-4 py-1.5 text-sm transition-colors',
                   t === tab
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:text-foreground',
@@ -113,14 +109,14 @@ export function ProductSegmentationPage() {
               </button>
             ))}
           </div>
-          <div className="h-56">
+          <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={distData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }}>
+              <BarChart data={distData} margin={{ top: 8, right: 16, left: 0, bottom: 32 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" angle={-15} textAnchor="end" height={40} interval={0} fontSize={11} />
-                <YAxis fontSize={11} />
+                <XAxis dataKey="name" angle={-15} textAnchor="end" height={48} interval={0} fontSize={12} />
+                <YAxis fontSize={12} />
                 <Tooltip />
-                <Bar dataKey="count" name="Products" fill="#2563eb" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="count" name="Products" fill="#2563eb" radius={[6, 6, 0, 0]}>
                   {distData.map((entry, idx) => (
                     <Cell key={entry.name} fill={COLORS[idx % COLORS.length]} />
                   ))}
@@ -130,19 +126,18 @@ export function ProductSegmentationPage() {
           </div>
         </ContentCard>
 
-        {/* Donut */}
         <ContentCard title={`${tab} Proportions`} description="Share of total products.">
-          <div className="h-56">
+          <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={distData}
                   dataKey="count"
                   nameKey="name"
-                  cx="50%"
+                  cx="45%"
                   cy="50%"
-                  outerRadius={70}
-                  innerRadius={30}
+                  outerRadius={90}
+                  innerRadius={40}
                   label={({ name, percent }: { name?: string; percent?: number }) =>
                     `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
                   }
@@ -158,33 +153,90 @@ export function ProductSegmentationPage() {
         </ContentCard>
       </div>
 
-      {/* ============ Row 3: ABC × RFM Cross-Tab ============ */}
-      <div className="mb-4">
-        <ContentCard title="ABC × RFM Cross-Tabulation" description="Product count per combined ABC × RFM segment.">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2">Segmentation</th>
-                  <th className="px-3 py-2">Products</th>
-                  <th className="px-3 py-2">% of Total</th>
+      {/* ============ 3. Cross-Tab Table ============ */}
+      <ContentCard title="ABC × RFM Cross-Tabulation" description="Product count per combined ABC × RFM segment.">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="px-4 py-3">Segmentation</th>
+                <th className="px-4 py-3">Products</th>
+                <th className="px-4 py-3">% of Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {crossTab.map((row) => (
+                <tr key={row.name} className="border-b border-border/60 transition-colors hover:bg-muted/30">
+                  <td className="px-4 py-2.5 text-foreground">{row.name}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">{row.count.toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">
+                    {((row.count / result.rows) * 100).toFixed(1)}%
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {crossTab.map((row) => (
-                  <tr key={row.name} className="border-b border-border/60">
-                    <td className="px-3 py-2 text-foreground">{row.name}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{row.count.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {((row.count / result.rows) * 100).toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </ContentCard>
+
+      {/* ============ 4. Advanced Analytics (one per full-width row) ============ */}
+      <h2 className="pt-2 text-xl font-semibold text-foreground">Advanced Analytics</h2>
+
+      {/* Pareto */}
+      <ContentCard
+        title="ABC Pareto Curve"
+        description="Categories ranked by order amount. The green line shows cumulative contribution; the red dashed line marks the 80% threshold."
+      >
+        <div className="h-80">
+          <ParetoChart data={result.data} />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          The Pareto principle (80/20 rule) helps identify which product categories drive the majority of revenue.
+          Categories to the left of the red line are your most critical.
+        </p>
+      </ContentCard>
+
+      {/* RFM Scatter */}
+      <ContentCard
+        title="Recency vs Frequency (RFM Behavioral Clusters)"
+        description="Each dot is a product. The Y-axis shows recency in days (most recent at top); the X-axis shows order frequency. Colors indicate RFM category."
+      >
+        <div className="h-80">
+          <RfmScatterChart data={result.data} />
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground lg:grid-cols-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-full bg-[#2563eb]" />
+            <span>Runners — frequent, recent</span>
           </div>
-        </ContentCard>
-      </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-full bg-[#16a34a]" />
+            <span>Repeaters — moderate activity</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-full bg-[#f59e0b]" />
+            <span>Dormant — low frequency, aged</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-full bg-[#dc2626]" />
+            <span>Slow Movers — sporadic demand</span>
+          </div>
+        </div>
+      </ContentCard>
+
+      {/* ROL Scatter */}
+      <ContentCard
+        title="Static vs Dynamic ROL Comparison"
+        description="Each dot is a product, colored by ABC Class. The X-axis is the volume-binned (static) ROL; the Y-axis is the mode-binned (dynamic) ROL. Points above the diagonal indicate where dynamic ROL exceeds static ROL, and vice versa."
+      >
+        <div className="h-80">
+          <RolScatterChart data={result.data} />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Products clustering along the diagonal show agreement between the two methods. 
+          Class A products (blue) typically have the highest ROL values and appear in the upper-right.
+        </p>
+      </ContentCard>
     </div>
   )
 }
