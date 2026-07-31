@@ -4,10 +4,10 @@ from __future__ import annotations
 
 # Default file path (relative to project root)
 DEFAULT_INTAKE_FILE = "notebook/Order Intake Incl Amounts.xlsx"
-DEFAULT_INTAKE_SHEET = "M2&H2"  # or "M2&H2"
+DEFAULT_INTAKE_SHEET = "M1"  # or "M2&H2"
 
 # Service level & lead time
-DEFAULT_SERVICE_LEVEL = 0.85
+DEFAULT_SERVICE_LEVEL = 0.65
 DEFAULT_LEAD_TIME_WEEKS = 4
 
 # Static ROL volume thresholds

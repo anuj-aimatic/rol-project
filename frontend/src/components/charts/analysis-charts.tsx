@@ -103,7 +103,7 @@ interface RfmScatterProps {
 
 export function RfmScatterChart({ data }: RfmScatterProps) {
   const scatterData = useMemo(() => {
-    const maxPoints = 2000
+    const maxPoints = 1000
     const step = Math.max(1, Math.floor(data.length / maxPoints))
     const sampled = data.filter((_, i) => i % step === 0)
 
@@ -170,7 +170,7 @@ interface RolScatterProps {
 
 export function RolScatterChart({ data }: RolScatterProps) {
   const scatterData = useMemo(() => {
-    const maxPoints = 2000
+    const maxPoints = 1000
     const step = Math.max(1, Math.floor(data.length / maxPoints))
     const sampled = data.filter((_, i) => i % step === 0)
 

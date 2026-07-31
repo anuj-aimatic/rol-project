@@ -133,7 +133,29 @@ def run_pipeline(
     weekly = _build_weekly_from_intake(intake)
     print(f"       Weekly demand records: {len(weekly)}")
 
-    final = add_rol_columns(final, weekly, service_level=service_level, lead_time=lead_time)
+    # Extract per-SKU lead time from intake data (mode per SKU)
+    if "Lead Time" in intake.columns:
+        lead_time_per_sku: dict[str, float] = (
+            intake.groupby("Item_Code")["Lead Time"]
+            .agg(lambda x: float(x.mode().iloc[0]) if not x.mode().empty else float(x.median()))
+            .fillna(lead_time)
+            .to_dict()
+        )
+        print(f"       Per-SKU lead times extracted for {len(lead_time_per_sku)} items")
+    else:
+        lead_time_per_sku = {}
+        print("       No 'Lead Time' column found — using global lead_time")
+
+    final = add_rol_columns(
+        final, weekly,
+        service_level=service_level,
+        lead_time=lead_time,
+        lead_time_map=lead_time_per_sku if lead_time_per_sku else None,
+    )
+
+    # Ensure lead_time column is present in final output
+    if "lead_time" not in final.columns and lead_time_per_sku:
+        final["lead_time"] = final["Item_Code"].map(lead_time_per_sku).fillna(float(lead_time)).astype(int)
 
     print(f"       Done! {len(final)} rows, {len(final.columns)} columns")
 

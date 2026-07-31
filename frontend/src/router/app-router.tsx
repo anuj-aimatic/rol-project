@@ -2,9 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShellLayout } from '@/layouts/app-shell-layout'
 import { AnalyticsPage } from '@/pages/analytics-page'
+import { CustomerAnalyticsPage } from '@/pages/customer-analytics-page'
 import { InventoryExplorerPage } from '@/pages/inventory-explorer-page'
-import { InventoryOptimizationPage } from '@/pages/inventory-optimization-page'
-import { InventoryPoliciesPage } from '@/pages/inventory-policies-page'
 import { OverviewPage } from '@/pages/overview-page'
 import { ProductDetailPage } from '@/pages/product-detail-page'
 import { ProductSegmentationPage } from '@/pages/product-segmentation-page'
@@ -20,9 +19,8 @@ export function AppRouter() {
         <Route path="/inventory-explorer" element={<InventoryExplorerPage />} />
         <Route path="/inventory-explorer/:itemCode" element={<ProductDetailPage />} />
         <Route path="/product-segmentation" element={<ProductSegmentationPage />} />
-        <Route path="/inventory-optimization" element={<InventoryOptimizationPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/inventory-policies" element={<InventoryPoliciesPage />} />
+        <Route path="/customer-analytics" element={<CustomerAnalyticsPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>

@@ -112,11 +112,11 @@ def _compute_dmax(freq_df: pd.DataFrame, service_level: float) -> float:
     return result
 
 
-def _rol_metrics(d_avg_week: float, d_max_week: float, lead_time: int) -> dict[str, float]:
-    """Compute safety stock and reorder level."""
+def _rol_metrics(d_avg_week: float, d_max_week: float, lead_time: float) -> dict[str, float]:
+    """Compute safety stock and reorder level. ROL is always rounded to integer (count of product)."""
     ss = (d_max_week - d_avg_week) * lead_time
     rol_monthly = (d_avg_week * 4) + ss
-    return {"rol": round(rol_monthly, 2), "ss": round(ss, 2), "dmax": round(d_max_week, 2)}
+    return {"rol": float(round(rol_monthly)), "ss": round(ss, 2), "dmax": round(d_max_week, 2)}
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +167,7 @@ def add_rol_columns(
     weekly: pd.DataFrame,
     service_level: float = DEFAULT_SERVICE_LEVEL,
     lead_time: int = DEFAULT_LEAD_TIME_WEEKS,
+    lead_time_map: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Add ``rol_static``, ``rol_dynamic`` and detailed ROL metric columns.
 
@@ -192,6 +193,10 @@ def add_rol_columns(
     for ic in item_codes:
         m = metrics[ic]
         w = weekly[weekly["Item Code"] == ic]
+
+        # Use per-SKU lead time from data, fall back to global default
+        item_lt = lead_time_map.get(ic, float(lead_time)) if lead_time_map else float(lead_time)
+        m["lead_time"] = item_lt
 
         if w.empty:
             for prefix in ("st_", "dy_"):
@@ -225,10 +230,10 @@ def add_rol_columns(
         # Store bare weeks_with_orders for the standalone column
         m["weeks_with_orders"] = weeks_with_orders
 
-        # ----- Static ROL -----
+        # ----- Static ROL (uses per-SKU lead time) -----
         static_bin = _volume_logic(item_sales)
         static_res = compute_rol_for_item(
-            weekly, ic, static_bin, total_weeks_global, service_level, lead_time
+            weekly, ic, static_bin, total_weeks_global, service_level, int(item_lt)
         )
         d_avg = static_res["d_avg_week"]
         d_max = static_res["d_max_week"]
@@ -241,10 +246,10 @@ def add_rol_columns(
         m["st_max_monthly_demand"] = round(d_max * 4, 2)
         m["st_safety_stock"] = static_res["safety_stock"]
 
-        # ----- Dynamic ROL -----
+        # ----- Dynamic ROL (uses per-SKU lead time) -----
         dynamic_bin = mode_of_weekly
         dynamic_res = compute_rol_for_item(
-            weekly, ic, dynamic_bin, total_weeks_global, service_level, lead_time
+            weekly, ic, dynamic_bin, total_weeks_global, service_level, int(item_lt)
         )
         d_avg = dynamic_res["d_avg_week"]
         d_max = dynamic_res["d_max_week"]
@@ -268,6 +273,7 @@ def add_rol_columns(
 
     # ---- Build all metric columns in order ----
     col_order = [
+        "lead_time",
         "total_weeks",
         "weeks_with_orders",
         "weeks_with_zero_orders",

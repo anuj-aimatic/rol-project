@@ -15,16 +15,15 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from backend.customer_analytics import run_customer_analytics
+from backend.data_loader import load_order_intake
 from backend.pipeline import run_pipeline
 
 app = FastAPI(title="Inventory Analytics API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,6 +34,7 @@ _latest_result: pd.DataFrame | None = None
 _latest_excel: bytes | None = None
 _latest_workbook: bytes | None = None
 _latest_sheets: list[str] | None = None
+_latest_intake: pd.DataFrame | None = None  # cached Order Intake for customer analytics
 
 
 def _list_sheets(content: bytes) -> list[str]:
@@ -123,7 +123,7 @@ async def process(
     ``st_*`` / ``dy_*`` metric groups, and the full hierarchical
     ABC + RFM + Risk classification.
     """
-    global _latest_result, _latest_excel, _latest_workbook, _latest_sheets
+    global _latest_result, _latest_excel, _latest_workbook, _latest_sheets, _latest_intake
 
     if not (0 < service_level <= 1):
         raise HTTPException(status_code=400, detail="service_level must be between 0 and 1")
@@ -153,6 +153,15 @@ async def process(
         _latest_result = df.copy()
         _latest_excel = _df_to_excel_bytes(df)
 
+        # Also compute customer analytics from the same workbook
+        from tempfile import NamedTemporaryFile
+        with NamedTemporaryFile(suffix=".xlsx") as tmp:
+            tmp.write(content)
+            tmp.flush()
+            intake = load_order_intake(tmp.name, sheet_name=sheet_name)
+        _latest_intake = intake.copy()
+        customer_analytics = run_customer_analytics(intake)
+
         return {
             "sheetName": sheet_name,
             "serviceLevel": service_level,
@@ -160,7 +169,34 @@ async def process(
             "rows": int(len(df)),
             "columns": list(df.columns),
             "data": df.to_dict(orient="records"),
+            "customerAnalytics": customer_analytics,
         }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/customer-analytics")
+async def customer_analytics() -> dict[str, object]:
+    """
+    Compute customer-level analytics from the cached intake DataFrame.
+
+    The intake DataFrame is cached during pipeline execution (``/process``).
+    If not available, run the pipeline from Overview first.
+
+    Returns portfolio (per-customer), concentration (Pareto curve),
+    top products, category preferences, and high-level KPIs.
+    """
+    global _latest_intake
+
+    if _latest_intake is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No intake data cached. Run the pipeline from Overview first.",
+        )
+
+    try:
+        result = run_customer_analytics(_latest_intake)
+        return result  # type: ignore[return-value]
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

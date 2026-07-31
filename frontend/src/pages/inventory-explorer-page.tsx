@@ -29,6 +29,7 @@ const KEY_COLUMNS = [
   'rol_dynamic',
   'st_safety_stock',
   'dy_safety_stock',
+  'lead_time',
   'st_avg_weekly_demand',
   'dy_avg_weekly_demand',
   'st_dmax_week',
@@ -61,6 +62,7 @@ const COL_LABELS: Record<string, string> = {
   rol_dynamic: 'ROL (D)',
   st_safety_stock: 'SS (S)',
   dy_safety_stock: 'SS (D)',
+  lead_time: 'Lead Time',
   st_avg_weekly_demand: 'Avg Wk (S)',
   dy_avg_weekly_demand: 'Avg Wk (D)',
   st_dmax_week: 'Dmax Wk (S)',
@@ -301,27 +303,30 @@ export function InventoryExplorerPage() {
     return KEY_COLUMNS.filter((c) => result.columns.includes(c))
   }, [result])
 
-  // ---------- unique values per column (formatted) ----------
-  const uniqueValuesByColumn = useMemo(() => {
-    if (!result) return {} as Record<string, string[]>
-    const map: Record<string, string[]> = {}
-    for (const col of columns) {
-      const set = new Set<string>()
-      for (const row of result.data) {
-        const v = fmt(row[col], col)
-        if (v && v !== '—') set.add(v)
-      }
-      const sorted = [...set].sort((a, b) => {
-        // Try numeric sort
-        const na = parseFloat(a.replace(/[₹,]/g, ''))
-        const nb = parseFloat(b.replace(/[₹,]/g, ''))
-        if (!isNaN(na) && !isNaN(nb)) return na - nb
-        return a.localeCompare(b)
-      })
-      map[col] = sorted.slice(0, 100)
+  // ---------- unique values per column — LAZY (only computed when popover opens) ----------
+  const uniqueValuesCache = useRef<Record<string, string[]>>({})
+  // Clear cache when pipeline result changes (new data = new unique values)
+  useEffect(() => {
+    uniqueValuesCache.current = {}
+  }, [result])
+  const getUniqueValues = useCallback((col: string): string[] => {
+    if (!result) return []
+    if (uniqueValuesCache.current[col]) return uniqueValuesCache.current[col]
+
+    const set = new Set<string>()
+    for (const row of result.data) {
+      const v = fmt(row[col], col)
+      if (v && v !== '—') set.add(v)
     }
-    return map
-  }, [result, columns])
+    const sorted = [...set].sort((a, b) => {
+      const na = parseFloat(a.replace(/[₹,]/g, ''))
+      const nb = parseFloat(b.replace(/[₹,]/g, ''))
+      if (!isNaN(na) && !isNaN(nb)) return na - nb
+      return a.localeCompare(b)
+    })
+    uniqueValuesCache.current[col] = sorted.slice(0, 100)
+    return sorted.slice(0, 100)
+  }, [result])
 
   // ---------- sort + filter rows ----------
   const filtered = useMemo(() => {
@@ -373,22 +378,23 @@ export function InventoryExplorerPage() {
 
   const handleShowMore = () => setVisibleCount((prev) => prev + PAGE_SIZE)
 
+  // Track the last sorted column to reset direction on new column click
+  const lastSortColRef = useRef<string | null>(null)
+
   // ---------- sort handler ----------
   const handleSort = useCallback(
     (col: string) => {
-      setSortCol((prev) => {
-        if (prev !== col) return col
-        return col // always keep col
-      })
+      const isNewCol = lastSortColRef.current !== col
+      lastSortColRef.current = col
+      setSortCol(col)
       setSortDir((prev) => {
-        if (sortCol !== col) return 'asc'
-        if (prev === null) return 'asc'
+        if (isNewCol || prev === null) return 'asc'
         if (prev === 'asc') return 'desc'
         return null
       })
       setVisibleCount(PAGE_SIZE)
     },
-    [sortCol],
+    [],  // stable — uses ref for isNewCol check
   )
 
   // ---------- filter handlers ----------
@@ -555,7 +561,7 @@ export function InventoryExplorerPage() {
                       {openPopover === col && (
                         <ColumnFilterPopover
                           col={col}
-                          values={uniqueValuesByColumn[col] ?? []}
+                          values={getUniqueValues(col)}
                           selected={columnFilters[col] ?? new Set()}
                           onToggle={(v) => toggleFilter(col, v)}
                           onClose={() => setOpenPopover(null)}

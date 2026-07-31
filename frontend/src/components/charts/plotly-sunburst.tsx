@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import type { InventoryRecord } from '@/services/state/processed-data-context'
 
 interface PlotlySunburstProps {
@@ -6,64 +6,79 @@ interface PlotlySunburstProps {
 }
 
 function buildSunburstTree(rows: InventoryRecord[]) {
-  const catMap = new Map<string, number>()
-  const grpMap = new Map<string, number>()
-  const subMap = new Map<string, number>()
+  const totalAmount = rows.reduce((s, r) => {
+    const amt = typeof r.ABC_Quantum === 'number' ? r.ABC_Quantum : Number(r.ABC_Quantum ?? 0)
+    return Number.isFinite(amt) ? s + amt : s
+  }, 0)
+  if (totalAmount === 0) return { ids: [], labels: [], parents: [], values: [], customdata: [] }
 
-  for (const r of rows) {
+  // Single pass: build category + group aggregates using numeric indices
+  const catTotals = new Map<string, number>()
+  const grpTotals = new Map<string, number>()
+  const subTotals = new Map<string, number>()
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    const amt = typeof r.ABC_Quantum === 'number' ? r.ABC_Quantum : Number(r.ABC_Quantum ?? 0)
+    if (!Number.isFinite(amt)) continue
+
     const cat = String(r.Item_Category_Code ?? '?')
-    const grp = String(r['Product Group Code'] ?? '?')
-    const sub = String(r.Product_SubGroup_Code ?? '?')
-    const amount = typeof r.ABC_Quantum === 'number' ? r.ABC_Quantum : Number(r.ABC_Quantum ?? 0)
-    if (!Number.isFinite(amount)) continue
+    catTotals.set(cat, (catTotals.get(cat) ?? 0) + amt)
 
-    catMap.set(cat, (catMap.get(cat) ?? 0) + amount)
-    grpMap.set(`${cat}|${grp}`, (grpMap.get(`${cat}|${grp}`) ?? 0) + amount)
-    subMap.set(`${cat}|${grp}|${sub}`, (subMap.get(`${cat}|${grp}|${sub}`) ?? 0) + amount)
+    const grp = String(r['Product Group Code'] ?? '?')
+    const grpKey = cat + '||' + grp
+    grpTotals.set(grpKey, (grpTotals.get(grpKey) ?? 0) + amt)
+
+    const sub = String(r.Product_SubGroup_Code ?? '?')
+    const subKey = grpKey + '||' + sub
+    subTotals.set(subKey, (subTotals.get(subKey) ?? 0) + amt)
   }
 
+  const ids: string[] = []
   const labels: string[] = []
   const parents: string[] = []
   const values: number[] = []
-  const ids: string[] = []
   const customdata: number[] = []
-  const total = [...catMap.values()].reduce((s, v) => s + v, 0)
+  const invTotal = totalAmount > 0 ? 100 / totalAmount : 0
 
-  for (const [cat, catVal] of catMap) {
-    ids.push(cat); labels.push(cat); parents.push(''); values.push(catVal)
-    customdata.push(total > 0 ? (catVal / total) * 100 : 0)
+  for (const [cat, v] of catTotals) {
+    ids.push(cat); labels.push(cat); parents.push(''); values.push(v); customdata.push(v * invTotal)
   }
-  for (const [key, grpVal] of grpMap) {
-    const [cat, grp] = key.split('|')
-    ids.push(key); labels.push(grp); parents.push(cat); values.push(grpVal)
-    customdata.push(total > 0 ? (grpVal / total) * 100 : 0)
+  for (const [key, v] of grpTotals) {
+    const sep = key.indexOf('||')
+    const cat = key.slice(0, sep)
+    const grp = key.slice(sep + 2)
+    ids.push(key); labels.push(grp); parents.push(cat); values.push(v); customdata.push(v * invTotal)
   }
-  for (const [key, subVal] of subMap) {
-    const parts = key.split('|')
-    const grp = parts.slice(0, 2).join('|')
-    ids.push(key); labels.push(parts[2]); parents.push(grp); values.push(subVal)
-    customdata.push(total > 0 ? (subVal / total) * 100 : 0)
+  for (const [key, v] of subTotals) {
+    const firstSep = key.indexOf('||')
+    const secondSep = key.indexOf('||', firstSep + 2)
+    const parentKey = key.slice(0, secondSep)
+    ids.push(key); labels.push(key.slice(secondSep + 2)); parents.push(parentKey); values.push(v); customdata.push(v * invTotal)
   }
 
   return { ids, labels, parents, values, customdata }
 }
 
-// Custom colorscale matching #2563eb (Tailwind blue-600)
+// Deeper blue range — no pale/grey tones. Starts at visible blue-400, ends at dark blue-900.
 const BLUE_COLORSCALE = [
-  [0, '#dbeafe'],   // blue-100 — light
-  [0.3, '#93c5fd'], // blue-300
-  [0.6, '#3b82f6'], // blue-500
-  [0.8, '#2563eb'], // blue-600 — primary
-  [1, '#1d4ed8'],   // blue-700 — dark
+  [0, '#60a5fa'],   // blue-400 — visible light blue (no grey)
+  [0.25, '#3b82f6'], // blue-500
+  [0.5, '#2563eb'],  // blue-600 — primary brand blue
+  [0.75, '#1d4ed8'], // blue-700
+  [1, '#1e3a8a'],    // blue-900 — deep dark
 ]
 
 let plotlyInstance: typeof import('plotly.js-dist-min') | null = null
 
-export function PlotlySunburst({ data }: PlotlySunburstProps) {
+const PlotlySunburstInner = memo(function PlotlySunburstInner({ data }: PlotlySunburstProps) {
   const chartRef = useRef<HTMLDivElement>(null)
 
+  // Memoize the tree so it's only rebuilt when data reference changes
+  const tree = useMemo(() => buildSunburstTree(data), [data])
+
   useEffect(() => {
-    if (!chartRef.current || data.length === 0) return
+    if (!chartRef.current || data.length === 0 || tree.ids.length === 0) return
 
     let cancelled = false
 
@@ -74,7 +89,6 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
       if (cancelled || !chartRef.current) return
 
       const Plot = plotlyInstance!
-      const tree = buildSunburstTree(data)
 
       const trace: Record<string, unknown> = {
         type: 'sunburst',
@@ -97,7 +111,11 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
           cmin: 0,
           cmax: 100,
           showscale: true,
-          colorbar: { title: 'Contribution %', thickness: 12 },
+          colorbar: {
+            title: { text: 'Contribution %', font: { size: 10 } },
+            thickness: 12,
+            tickfont: { size: 9 },
+          },
         },
       }
 
@@ -123,7 +141,7 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
         try { plotlyInstance.purge(chartRef.current) } catch { /* ignore */ }
       }
     }
-  }, [data])
+  }, [data, tree])  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (data.length === 0) {
     return (
@@ -134,4 +152,6 @@ export function PlotlySunburst({ data }: PlotlySunburstProps) {
   }
 
   return <div ref={chartRef} className="h-full w-full" />
-}
+})
+
+export { PlotlySunburstInner as PlotlySunburst }

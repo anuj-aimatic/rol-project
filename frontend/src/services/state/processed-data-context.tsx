@@ -5,6 +5,18 @@ export interface InventoryRecord {
   [key: string]: string | number | boolean | null
 }
 
+export interface CustomerAnalyticsData {
+  portfolio: Record<string, unknown>[]
+  concentration: Record<string, unknown>[]
+  topProducts: Record<string, unknown>[]
+  categoryPrefs: Record<string, unknown>[]
+  kpis: Record<string, number | string>
+  customerRiskDistribution: Record<string, unknown>[]
+  sankeyData: Record<string, unknown>
+  internalExternalProducts: Record<string, unknown>[]
+  businessDrivers: Record<string, unknown>
+}
+
 export interface PipelineResult {
   sheetName: string
   serviceLevel: number
@@ -13,6 +25,7 @@ export interface PipelineResult {
   columns: string[]
   data: InventoryRecord[]
   processedAt: string
+  customerAnalytics?: CustomerAnalyticsData
 }
 
 interface ProcessedDataContextValue {

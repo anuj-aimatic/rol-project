@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Bar,
@@ -29,7 +29,7 @@ export function ProductSegmentationPage() {
   const { result } = useProcessedData()
   const [tab, setTab] = useState<Tab>('ABC')
 
-  const distData = (() => {
+  const distData = useMemo(() => {
     if (!result) return []
     const field =
       tab === 'ABC' ? 'ABC_Class' : tab === 'RFM' ? 'RFM_Category' : 'Risk_Category'
@@ -37,7 +37,7 @@ export function ProductSegmentationPage() {
     return Object.entries(raw)
       .map(([k, v]) => ({ name: k, count: v }))
       .sort((a, b) => b.count - a.count)
-  })()
+  }, [result, tab])
 
   const subtitle =
     tab === 'ABC'
@@ -46,7 +46,7 @@ export function ProductSegmentationPage() {
         ? 'Recency-Frequency-Monetary behavioral classification.'
         : 'Customer concentration risk categorization.'
 
-  const crossTab = (() => {
+  const crossTab = useMemo(() => {
     if (!result) return []
     const map = new Map<string, number>()
     for (const row of result.data) {
@@ -56,7 +56,7 @@ export function ProductSegmentationPage() {
     return [...map.entries()]
       .map(([k, v]) => ({ name: k, count: v }))
       .sort((a, b) => b.count - a.count)
-  })()
+  }, [result])
 
   if (!result) {
     return (

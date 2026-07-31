@@ -19,16 +19,15 @@ const STATE_KEY = 'overview_state_v2'
 interface LocalState {
   selectedSheet: string
   serviceLevel: number
-  leadTime: number
 }
 
 function readState(): LocalState {
   try {
     const raw = sessionStorage.getItem(STATE_KEY)
-    if (!raw) return { selectedSheet: '', serviceLevel: 0.85, leadTime: 4 }
+    if (!raw) return { selectedSheet: '', serviceLevel: 0.85 }
     return JSON.parse(raw) as LocalState
   } catch {
-    return { selectedSheet: '', serviceLevel: 0.85, leadTime: 4 }
+    return { selectedSheet: '', serviceLevel: 0.85 }
   }
 }
 
@@ -40,13 +39,12 @@ export function OverviewPage() {
   const [sheets, setSheets] = useState<string[]>([])
   const [selectedSheet, setSelectedSheet] = useState(persisted.selectedSheet)
   const [serviceLevel, setServiceLevel] = useState(persisted.serviceLevel)
-  const [leadTime, setLeadTime] = useState(persisted.leadTime)
   const [loadingSheets, setLoadingSheets] = useState(false)
   const [processing, setProcessing] = useState(false)
 
   useEffect(() => {
-    sessionStorage.setItem(STATE_KEY, JSON.stringify({ selectedSheet, serviceLevel, leadTime }))
-  }, [selectedSheet, serviceLevel, leadTime])
+    sessionStorage.setItem(STATE_KEY, JSON.stringify({ selectedSheet, serviceLevel }))
+  }, [selectedSheet, serviceLevel])
 
   // Load cached sheets on mount
   useEffect(() => {
@@ -149,7 +147,7 @@ export function OverviewPage() {
       if (file) form.append('file', file)
       form.append('sheet_name', selectedSheet)
       form.append('service_level', String(serviceLevel))
-      form.append('lead_time', String(leadTime))
+      form.append('lead_time', '4') // fallback — per-SKU lead time from data is used
 
       const res = await apiClient.post<PipelineResult>('/process', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -164,6 +162,7 @@ export function OverviewPage() {
         columns: res.data.columns,
         data: res.data.data,
         processedAt: new Date().toISOString(),
+        customerAnalytics: res.data.customerAnalytics,
       })
 
       toast.success(`Analysis complete — ${res.data.rows.toLocaleString()} products.`)
@@ -255,35 +254,20 @@ export function OverviewPage() {
               </select>
             </div>
 
-            {/* Step 3: Service level + Lead time */}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
-                  Service level
-                </label>
-                <input
-                  type="number"
-                  min={0.01}
-                  max={0.99}
-                  step={0.01}
-                  value={serviceLevel}
-                  onChange={(e) => setServiceLevel(Number(e.target.value))}
-                  className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-ring"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
-                  Lead time (weeks)
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={52}
-                  value={leadTime}
-                  onChange={(e) => setLeadTime(Number(e.target.value))}
-                  className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-ring"
-                />
-              </div>
+            {/* Step 3: Service level */}
+            <div>
+              <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
+                Service level
+              </label>
+              <input
+                type="number"
+                min={0.01}
+                max={0.99}
+                step={0.01}
+                value={serviceLevel}
+                onChange={(e) => setServiceLevel(Number(e.target.value))}
+                className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-ring"
+              />
             </div>
 
             {/* Step 4: Run */}

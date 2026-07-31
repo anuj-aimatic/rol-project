@@ -1,14 +1,13 @@
 import {
   BarChart3,
-  BookOpen,
   ChevronLeft,
   ChevronRight,
   Compass,
   Layers3,
   LineChart,
   Settings,
-  Sparkles,
   Table2,
+  Users,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { NavLink } from 'react-router-dom'
@@ -25,9 +24,8 @@ export function Sidebar() {
       { label: 'Overview', path: '/overview', icon: Compass },
       { label: 'Inventory Explorer', path: '/inventory-explorer', icon: Table2 },
       { label: 'Product Segmentation', path: '/product-segmentation', icon: Layers3 },
-      { label: 'Inventory Optimization', path: '/inventory-optimization', icon: Sparkles },
       { label: 'Analytics', path: '/analytics', icon: BarChart3 },
-      { label: 'Inventory Policies', path: '/inventory-policies', icon: BookOpen },
+      { label: 'Customer Analytics', path: '/customer-analytics', icon: Users },
       { label: 'Reports', path: '/reports', icon: LineChart },
       { label: 'Settings', path: '/settings', icon: Settings },
     ],
