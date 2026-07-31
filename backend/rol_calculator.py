@@ -458,6 +458,24 @@ def _dmax_trace(freq_df: pd.DataFrame, service_level: float) -> dict[str, object
     }
 
 
+def _dmax_highlight_uppers(trace: dict[str, object], dmax: float) -> list[int]:
+    """Return the Upper value(s) of the frequency-table rows that decide Dmax.
+
+    - interpolation: both bracket rows (below.upper and above.upper)
+    - every other method: the single bucket whose Upper equals the resulting Dmax
+    """
+    if trace.get("method") == "interpolation":
+        uppers: list[int] = []
+        below = trace.get("below")
+        above = trace.get("above")
+        if isinstance(below, dict) and below.get("upper") is not None:
+            uppers.append(int(below["upper"]))
+        if isinstance(above, dict) and above.get("upper") is not None:
+            uppers.append(int(above["upper"]))
+        return uppers
+    return [int(dmax)]
+
+
 def compute_rol_steps_for_item(
     weekly: pd.DataFrame,
     item_code: str,
@@ -584,6 +602,13 @@ def compute_rol_steps_for_item(
             d_avg = float(freq_df["Weighted Sum"].sum())
             trace = _dmax_trace(freq_df, service_level)
             d_max = float(trace["dmax"])
+            # Bucket(s) that decide Dmax (the bracket row(s) used by the method).
+            dmax_highlight_uppers = _dmax_highlight_uppers(trace, d_max)
+
+            # The frequency table is shown ONCE — at the Frequency distribution
+            # step — with the Dmax-deciding bucket(s) color-highlighted, so the
+            # client sees every value (Freq / Contrib / Cum Prob / Mid Pt / Wtd
+            # Sum) in one place and can verify the Dmax result by eye.
             steps.append(
                 {
                     "step": 4,
@@ -592,13 +617,15 @@ def compute_rol_steps_for_item(
                     "inputs": {"total_weeks": total_weeks, "populated_intervals": len(rows)},
                     "result": f"{len(rows)} populated intervals",
                     "frequency_table": rows,
+                    "highlight_uppers": dmax_highlight_uppers,
                 }
             )
+
             steps.append(
                 {
                     "step": 5,
                     "title": "Average weekly demand",
-                    "formula": "Σ (Mid Point × Contribution)",
+                    "formula": "Σ (Mid Point × Contribution) — see the Frequency distribution table in step 4",
                     "inputs": {},
                     "result": round(d_avg, 2),
                 }

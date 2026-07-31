@@ -46,6 +46,7 @@ interface RolStep {
   inputs: Record<string, unknown>
   result: string | number
   frequency_table?: FrequencyRow[]
+  highlight_uppers?: number[]
   detail?: DmaxDetail
 }
 
@@ -128,7 +129,7 @@ function WeeklyRecordsTable({ rows }: { rows: WeeklyRecord[] }) {
 
 /* ---------- Frequency table ---------- */
 
-function FrequencyTable({ rows }: { rows: FrequencyRow[] }) {
+function FrequencyTable({ rows, highlightUppers = [] }: { rows: FrequencyRow[]; highlightUppers?: number[] }) {
   return (
     <div className="mt-2 overflow-x-auto rounded-lg border border-border">
       <table className="min-w-full border-collapse text-xs">
@@ -145,17 +146,39 @@ function FrequencyTable({ rows }: { rows: FrequencyRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={`${r.lower}-${r.upper}`} className="odd:bg-background even:bg-card/40">
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.lower}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.upper}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.frequency}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.contribution}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.cum_probability}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.mid_point}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.weighted_sum}</td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const isHighlighted = highlightUppers.includes(r.upper)
+            return (
+              <tr
+                key={`${r.lower}-${r.upper}`}
+                className={
+                  isHighlighted
+                    ? 'bg-primary/15 font-semibold text-foreground'
+                    : 'odd:bg-background even:bg-card/40'
+                }
+              >
+                <td
+                  className={`border-b border-border/60 px-2 py-1 font-mono ${
+                    isHighlighted ? 'border-l-2 border-l-primary' : ''
+                  }`}
+                >
+                  {r.lower}
+                </td>
+                <td
+                  className={`border-b border-border/60 px-2 py-1 font-mono ${
+                    isHighlighted ? 'text-primary' : ''
+                  }`}
+                >
+                  {r.upper}
+                </td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.frequency}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.contribution}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.cum_probability}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.mid_point}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.weighted_sum}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -200,9 +223,25 @@ function RolBlock({ label, block }: { label: string; block: RolTraceBlock }) {
                     {step.detail.fraction != null && (
                       <span className="ml-1">· fraction = {step.detail.fraction}</span>
                     )}
+                    {step.detail.method === 'interpolation' && (
+                      <span className="ml-1">· Dmax is interpolated between the two highlighted buckets (see step 4)</span>
+                    )}
                   </p>
                 )}
-                {step.frequency_table && <FrequencyTable rows={step.frequency_table} />}
+                {step.frequency_table && (
+                  <div>
+                    <FrequencyTable
+                      rows={step.frequency_table}
+                      highlightUppers={step.highlight_uppers}
+                    />
+                    {step.highlight_uppers && step.highlight_uppers.length > 0 && (
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        <span className="mr-1 inline-block h-2 w-2 rounded-sm bg-primary/40" />
+                        Highlighted row(s) = the bucket(s) that determine Dmax at the service level
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </li>
           )
@@ -223,6 +262,182 @@ function RolBlock({ label, block }: { label: string; block: RolTraceBlock }) {
         ))}
       </div>
     </ContentCard>
+  )
+}
+
+/* ---------- Static vs Dynamic — money impact scenario ---------- */
+
+function inr(v: number): string {
+  return '₹' + v.toLocaleString('en-IN', { maximumFractionDigits: 0 })
+}
+
+function toNum(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * Illustrative "what happens with your money" comparison of the two ROL
+ * policies. Uses avg unit price = Monetary ÷ total units to convert units to ₹.
+ * Stockout model: a week is exposed when weekly demand exceeds the ROL's
+ * weekly coverage (ROL ÷ 4 weeks). Clearly labeled as a decision-support model.
+ */
+function StaticVsDynamicScenario({ row, trace }: { row: Record<string, unknown>; trace: RolTrace | null }) {
+  const totalUnits = toNum(row.st_total_sales) || toNum(row.dy_total_sales)
+  const monetary = toNum(row.Monetary)
+  const price = totalUnits > 0 && monetary > 0 ? monetary / totalUnits : 0
+
+  const staticRol = toNum(row.rol_static)
+  const dynamicRol = toNum(row.rol_dynamic)
+  const weekly = trace?.weekly_records ?? []
+
+  const scenario = (rol: number) => {
+    const coverage = rol / 4 // weekly demand the ROL can absorb before a stockout
+    let exposedWeeks = 0
+    let unmetUnits = 0
+    for (const w of weekly) {
+      if (w.demand > coverage) {
+        exposedWeeks += 1
+        unmetUnits += w.demand - coverage
+      }
+    }
+    return {
+      stockValue: rol * price,
+      coverage,
+      exposedWeeks,
+      unmetUnits,
+      lostValue: unmetUnits * price,
+    }
+  }
+
+  const s = scenario(staticRol)
+  const d = scenario(dynamicRol)
+
+  // The higher-ROL policy locks more capital but covers more demand — quantify the gap.
+  const rolsDiffer = Math.abs(staticRol - dynamicRol) >= 0.5
+  const higherRolPolicy = dynamicRol > staticRol ? 'Dynamic' : 'Static'
+  const lowerRolPolicy = higherRolPolicy === 'Dynamic' ? 'Static' : 'Dynamic'
+  const extraCapital = Math.abs(d.stockValue - s.stockValue)
+  const avoidedLoss = Math.abs(s.lostValue - d.lostValue) // loss the higher policy avoids
+  const annualFactor = weekly.length > 0 ? 52 / weekly.length : 0
+  const avoidedAnnual = avoidedLoss * annualFactor // scale observed window to a year
+  const carryingCost = extraCapital * 0.2 // ~20%/yr holding cost assumption
+  const netBenefit = avoidedAnnual - carryingCost
+  const roiPct = extraCapital > 0 ? (netBenefit / extraCapital) * 100 : 0
+
+  const hasMoney = price > 0
+  const hasWeekly = weekly.length > 0
+
+  return (
+    <div className="mt-5 rounded-xl border border-border bg-background/50 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Static vs Dynamic — money impact (illustrative)
+      </p>
+      {hasMoney && (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Avg unit price ≈ {inr(price)}/unit · Monetary {inr(monetary)} ÷ {totalUnits.toLocaleString('en-IN')}{' '}
+          units sold · holding cost assumed ~20%/yr
+        </p>
+      )}
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {[
+          {
+            label: 'Static ROL',
+            rol: staticRol,
+            sc: s,
+            tone: 'text-foreground',
+          },
+          {
+            label: 'Dynamic ROL',
+            rol: dynamicRol,
+            sc: d,
+            tone: 'text-primary',
+          },
+        ].map(({ label, rol, sc, tone }) => (
+          <div key={label} className="rounded-xl border border-border bg-background/70 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+            <p className={`mt-1 font-mono text-lg font-semibold ${tone}`}>
+              {rol} units{hasMoney ? ` ≈ ${inr(sc.stockValue)}` : ''}
+            </p>
+            <ul className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+              <li>Weekly coverage ≈ {sc.coverage.toFixed(1)} units (ROL ÷ 4)</li>
+              <li>
+                Stockout exposure:{' '}
+                {hasWeekly ? `${sc.exposedWeeks} of ${weekly.length} weeks · ${sc.unmetUnits.toFixed(1)} units` : '—'}
+              </li>
+              {hasMoney && hasWeekly && (
+                <li>
+                  Stockout cost ≈ {inr(sc.lostValue)} over {weekly.length} observed weeks
+                </li>
+              )}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      {hasMoney && hasWeekly && rolsDiffer && (
+        <div className="mt-3 rounded-xl border border-border bg-background/70 px-3 py-2.5 text-xs">
+          <p className="mb-1 font-medium text-foreground">ROI check — {higherRolPolicy} vs {lowerRolPolicy}</p>
+          <ul className="space-y-0.5 text-muted-foreground">
+            <li>
+              Extra working capital locked by {higherRolPolicy}:{' '}
+              <strong className="text-foreground">{inr(extraCapital)}</strong>
+            </li>
+            <li>
+              Carrying cost of that stock (~20%/yr):{' '}
+              <strong className="text-foreground">−{inr(carryingCost)}/yr</strong>
+            </li>
+            <li>
+              Stockout cost avoided by {higherRolPolicy}:{' '}
+              <strong className="text-primary">+{inr(avoidedAnnual)}/yr</strong>
+            </li>
+            <li>
+              Net benefit per year:{' '}
+              <strong className={netBenefit >= 0 ? 'text-primary' : 'text-foreground'}>
+                {netBenefit >= 0 ? '+' : '−'}{inr(Math.abs(netBenefit))}/yr
+              </strong>
+            </li>
+            <li>
+              ROI on the extra capital:{' '}
+              <strong className="text-primary">{roiPct.toFixed(1)}%/yr</strong>
+            </li>
+          </ul>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            {roiPct > 0 ? (
+              <>
+                <strong className="text-primary">Verdict:</strong> the extra ₹ locked by {higherRolPolicy} earns ≈{' '}
+                <strong className="text-primary">{roiPct.toFixed(1)}% ROI</strong> per year through avoided stockout
+                cost — worth it if stockouts are costly.
+              </>
+            ) : (
+              <>
+                <strong className="text-foreground">Verdict:</strong> the extra capital is not recovered by the
+                stockout cost avoided — prefer {lowerRolPolicy} (lower working capital, accepting higher stockout
+                exposure) unless stockout penalty is higher than modeled.
+              </>
+            )}
+          </p>
+        </div>
+      )}
+
+      {hasMoney && hasWeekly && !rolsDiffer && (
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          Both policies arrive at the same ROL — no money trade-off for this SKU.
+        </p>
+      )}
+
+      {!hasMoney && (
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          No monetary data for this SKU (total units or Monetary missing) — showing units only.
+        </p>
+      )}
+      {hasMoney && !hasWeekly && (
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          Weekly demand records not loaded yet — stockout numbers appear with the calculation trace above.
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -453,6 +668,8 @@ export function ProductDetailPage() {
             </strong>
           </li>
         </ul>
+
+        <StaticVsDynamicScenario row={row} trace={trace} />
       </ContentCard>
     </div>
   )

@@ -538,9 +538,9 @@ export function InventoryExplorerPage() {
                   return (
                     <th
                       key={col}
-                      className="whitespace-nowrap border-b border-border px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                      className="whitespace-nowrap border-b border-border px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                     >
-                      <div className="flex items-center gap-0.5">
+                      <div className="flex items-center justify-center gap-0.5">
                         {/* Sortable label */}
                         <button
                           type="button"
@@ -563,7 +563,7 @@ export function InventoryExplorerPage() {
                             e.stopPropagation()
                             setOpenPopover((prev) => (prev === col ? null : col))
                           }}
-                          className={`ml-auto rounded p-0.5 transition-colors hover:bg-muted/80 ${
+                          className={`rounded p-0.5 transition-colors hover:bg-muted/80 ${
                             (columnFilters[col]?.size ?? 0) > 0
                               ? 'text-primary'
                               : 'text-muted-foreground'
@@ -603,7 +603,7 @@ export function InventoryExplorerPage() {
                     return (
                       <td
                         key={col}
-                        className="whitespace-nowrap border-b border-border/60 px-2 py-1.5 text-xs text-muted-foreground"
+                        className="whitespace-nowrap border-b border-border/60 px-2 py-1.5 text-center text-xs text-muted-foreground"
                       >
                         {isItemCode ? (
                           <Link
