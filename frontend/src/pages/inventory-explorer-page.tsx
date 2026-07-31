@@ -54,6 +54,7 @@ const KEY_COLUMNS = [
 ]
 
 const COL_LABELS: Record<string, string> = {
+  service_level: 'Service Level',
   Item_Code: 'Item Code',
   ABC_Class: 'ABC',
   RFM_Category: 'RFM',
@@ -90,6 +91,7 @@ const COL_LABELS: Record<string, string> = {
 
 /** Format a value for display: ₹ for monetary cols, commas, 2-decimal rounding. */
 function fmt(v: unknown, col?: string): string {
+  if (col === 'service_level') return fmtPct(v)
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) return '—'
@@ -108,6 +110,13 @@ function sortVal(r: Record<string, unknown>, col: string): number {
   const v = r[col]
   if (typeof v === 'number' && Number.isFinite(v)) return v
   return NaN
+}
+
+/** Format a service-level fraction (0.85) as a percent string (85%). */
+function fmtPct(v: unknown): string {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return `${Math.round(n * 100)}%`
 }
 
 /* ---------- Sort direction type ---------- */
@@ -300,8 +309,15 @@ export function InventoryExplorerPage() {
   // ---------- columns ----------
   const columns = useMemo(() => {
     if (!result) return []
-    return KEY_COLUMNS.filter((c) => result.columns.includes(c))
+    return ['service_level', ...KEY_COLUMNS.filter((c) => result.columns.includes(c))]
   }, [result])
+
+  // Cell value for a column (handles the pseudo service_level column)
+  const cellValue = useCallback(
+    (row: Record<string, unknown>, col: string): unknown =>
+      col === 'service_level' ? result?.serviceLevel : row[col],
+    [result],
+  )
 
   // ---------- unique values per column — LAZY (only computed when popover opens) ----------
   const uniqueValuesCache = useRef<Record<string, string[]>>({})
@@ -315,18 +331,18 @@ export function InventoryExplorerPage() {
 
     const set = new Set<string>()
     for (const row of result.data) {
-      const v = fmt(row[col], col)
+      const v = fmt(cellValue(row, col), col)
       if (v && v !== '—') set.add(v)
     }
     const sorted = [...set].sort((a, b) => {
-      const na = parseFloat(a.replace(/[₹,]/g, ''))
-      const nb = parseFloat(b.replace(/[₹,]/g, ''))
+      const na = parseFloat(a.replace(/[₹,%]/g, ''))
+      const nb = parseFloat(b.replace(/[₹,%]/g, ''))
       if (!isNaN(na) && !isNaN(nb)) return na - nb
       return a.localeCompare(b)
     })
     uniqueValuesCache.current[col] = sorted.slice(0, 100)
     return sorted.slice(0, 100)
-  }, [result])
+  }, [result, cellValue])
 
   // ---------- sort + filter rows ----------
   const filtered = useMemo(() => {
@@ -340,7 +356,7 @@ export function InventoryExplorerPage() {
     if (activeFilters.length > 0) {
       rows = rows.filter((r) =>
         activeFilters.every(([col, selected]) => {
-          const displayVal = fmt(r[col], col)
+          const displayVal = fmt(cellValue(r, col), col)
           return selected.has(displayVal)
         }),
       )
@@ -370,7 +386,7 @@ export function InventoryExplorerPage() {
     }
 
     return rows
-  }, [result, columnFilters, sortCol, sortDir, searchTerm, columns])
+  }, [result, columnFilters, sortCol, sortDir, searchTerm, columns, cellValue])
 
   // ---------- paginated slice ----------
   const page = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
@@ -462,7 +478,7 @@ export function InventoryExplorerPage() {
     <div>
       <PageHeader
         title="Inventory Explorer"
-        subtitle={`${result.rows.toLocaleString()} products · ${columns.length} metrics`}
+        subtitle={`${result.rows.toLocaleString()} products · ${columns.length} metrics · Service level ${fmtPct(result.serviceLevel)}`}
       />
 
       <ContentCard
@@ -583,7 +599,7 @@ export function InventoryExplorerPage() {
                 >
                   {columns.map((col) => {
                     const isItemCode = col === 'Item_Code'
-                    const val = fmt(row[col], col)
+                    const val = fmt(cellValue(row, col), col)
                     return (
                       <td
                         key={col}

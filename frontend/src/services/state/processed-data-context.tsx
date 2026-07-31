@@ -33,14 +33,28 @@ interface ProcessedDataContextValue {
   setResult: (next: PipelineResult | null) => void
 }
 
-const STORAGE_KEY = 'pipeline_result_v2'
+const STORAGE_KEY = 'pipeline_result_v3'
+const FALLBACK_KEY = 'pipeline_result_v2' // legacy sessionStorage key (pre-v3)
 
 const ProcessedDataContext = createContext<ProcessedDataContextValue | undefined>(undefined)
 
+/** Read from localStorage first (survives back-nav / tab close / restart), then legacy sessionStorage. */
 function readInitialResult(): PipelineResult | null {
+  const raw = (() => {
+    try {
+      const local = localStorage.getItem(STORAGE_KEY)
+      if (local) return local
+    } catch {
+      /* storage unavailable — fall through to sessionStorage */
+    }
+    try {
+      return sessionStorage.getItem(FALLBACK_KEY)
+    } catch {
+      return null
+    }
+  })()
+  if (!raw) return null
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
     const parsed = JSON.parse(raw) as PipelineResult
     if (!Array.isArray(parsed.data) || !Array.isArray(parsed.columns)) return null
     return parsed
@@ -55,10 +69,32 @@ export function ProcessedDataProvider({ children }: PropsWithChildren) {
   const setResult = (next: PipelineResult | null) => {
     setResultState(next)
     if (next === null) {
-      sessionStorage.removeItem(STORAGE_KEY)
+      try {
+        localStorage.removeItem(STORAGE_KEY)
+        sessionStorage.removeItem(FALLBACK_KEY)
+      } catch {
+        /* storage unavailable */
+      }
       return
     }
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+    const raw = JSON.stringify(next)
+    try {
+      // localStorage is per-origin and persists across tab close / browser restart
+      localStorage.setItem(STORAGE_KEY, raw)
+    } catch {
+      // Quota exceeded (very large datasets) → fall back to sessionStorage.
+      // Drop any stale localStorage copy so the fresher fallback wins on reload.
+      try {
+        localStorage.removeItem(STORAGE_KEY)
+      } catch {
+        /* storage unavailable */
+      }
+      try {
+        sessionStorage.setItem(FALLBACK_KEY, raw)
+      } catch {
+        /* storage unavailable */
+      }
+    }
   }
 
   const value = useMemo(() => ({ result, setResult }), [result])

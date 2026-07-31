@@ -7,7 +7,11 @@ both ``rol_static`` and ``rol_dynamic`` in every response.
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from io import BytesIO
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import pandas as pd
@@ -17,7 +21,8 @@ from fastapi.responses import StreamingResponse
 
 from backend.customer_analytics import run_customer_analytics
 from backend.data_loader import load_order_intake
-from backend.pipeline import run_pipeline
+from backend.pipeline import _build_weekly_from_intake, run_pipeline
+from backend.rol_calculator import compute_rol_steps_for_item, recompute_rol_columns
 
 app = FastAPI(title="Inventory Analytics API", version="2.0.0")
 
@@ -35,6 +40,75 @@ _latest_excel: bytes | None = None
 _latest_workbook: bytes | None = None
 _latest_sheets: list[str] | None = None
 _latest_intake: pd.DataFrame | None = None  # cached Order Intake for customer analytics
+_latest_service_level: float = 0.85
+_latest_lead_time: int = 4
+
+# ---- Disk-backed cache (survives API restarts) ----
+CACHE_DIR = Path(os.environ.get("ROL_CACHE_DIR", os.path.join(tempfile.gettempdir(), "rol_pipeline_cache")))
+
+
+def _cache_path(name: str) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return CACHE_DIR / name
+
+
+def _persist_cache() -> None:
+    """Write the in-memory cache to disk so a restart doesn't lose the workbook."""
+    try:
+        if _latest_workbook:
+            with open(_cache_path("workbook.bin"), "wb") as f:
+                f.write(_latest_workbook)
+        if _latest_excel:
+            with open(_cache_path("excel.bin"), "wb") as f:
+                f.write(_latest_excel)
+        if _latest_sheets is not None:
+            with open(_cache_path("sheets.json"), "w") as f:
+                json.dump(_latest_sheets, f)
+        with open(_cache_path("params.json"), "w") as f:
+            json.dump(
+                {"service_level": _latest_service_level, "lead_time": _latest_lead_time},
+                f,
+            )
+        if _latest_result is not None:
+            _latest_result.to_pickle(_cache_path("result.pkl"))
+        if _latest_intake is not None:
+            _latest_intake.to_pickle(_cache_path("intake.pkl"))
+    except Exception:
+        # Cache is best-effort; never crash a request because of it
+        pass
+
+
+def _load_cache() -> None:
+    """Restore the cache from disk on startup (best-effort)."""
+    global _latest_workbook, _latest_result, _latest_excel, _latest_sheets
+    global _latest_intake, _latest_service_level, _latest_lead_time
+    try:
+        wb = _cache_path("workbook.bin")
+        if wb.exists() and wb.stat().st_size > 0:
+            _latest_workbook = wb.read_bytes()
+        ex = _cache_path("excel.bin")
+        if ex.exists() and ex.stat().st_size > 0:
+            _latest_excel = ex.read_bytes()
+        sh = _cache_path("sheets.json")
+        if sh.exists():
+            _latest_sheets = json.loads(sh.read_text())
+        pa = _cache_path("params.json")
+        if pa.exists():
+            params = json.loads(pa.read_text())
+            _latest_service_level = params.get("service_level", 0.85)
+            _latest_lead_time = params.get("lead_time", 4)
+        rs = _cache_path("result.pkl")
+        if rs.exists() and rs.stat().st_size > 0:
+            _latest_result = pd.read_pickle(rs)
+        in_ = _cache_path("intake.pkl")
+        if in_.exists() and in_.stat().st_size > 0:
+            _latest_intake = pd.read_pickle(in_)
+    except Exception:
+        pass
+
+
+# Restore any previously cached workbook at startup
+_load_cache()
 
 
 def _list_sheets(content: bytes) -> list[str]:
@@ -91,8 +165,18 @@ async def upload_and_list_sheets(file: UploadFile = File(...)) -> list[str]:
 
     try:
         sheets = _list_sheets(content)
+        # A new workbook invalidates any previously computed results — both in
+        # memory and on disk — so a fresh upload never serves stale data
+        _latest_result = None
+        _latest_excel = None
+        _latest_intake = None
+        for stale in ("excel.bin", "result.pkl", "intake.pkl"):
+            p = _cache_path(stale)
+            if p.exists():
+                p.unlink()
         _latest_workbook = content
         _latest_sheets = sheets
+        _persist_cache()
         return sheets
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to read workbook: {exc}") from exc
@@ -124,6 +208,7 @@ async def process(
     ABC + RFM + Risk classification.
     """
     global _latest_result, _latest_excel, _latest_workbook, _latest_sheets, _latest_intake
+    global _latest_service_level, _latest_lead_time
 
     if not (0 < service_level <= 1):
         raise HTTPException(status_code=400, detail="service_level must be between 0 and 1")
@@ -152,6 +237,8 @@ async def process(
         _latest_sheets = [sheet_name]
         _latest_result = df.copy()
         _latest_excel = _df_to_excel_bytes(df)
+        _latest_service_level = service_level
+        _latest_lead_time = lead_time
 
         # Also compute customer analytics from the same workbook
         from tempfile import NamedTemporaryFile
@@ -162,6 +249,8 @@ async def process(
         _latest_intake = intake.copy()
         customer_analytics = run_customer_analytics(intake)
 
+        _persist_cache()
+
         return {
             "sheetName": sheet_name,
             "serviceLevel": service_level,
@@ -171,6 +260,71 @@ async def process(
             "data": df.to_dict(orient="records"),
             "customerAnalytics": customer_analytics,
         }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/recompute-rol")
+async def recompute_rol(
+    service_level: float = Form(...),
+    lead_time: int | None = Form(default=None),
+) -> dict[str, object]:
+    """Recompute only the ROL columns with a new service level (fast path).
+
+    Uses the cached pipeline output + cached Order Intake; segmentation
+    (ABC/RFM/Risk) is untouched, so any service level can be applied in
+    seconds without re-running the full pipeline.
+
+    Returns the same shape as ``/process`` (rows/columns/data + parameters).
+    """
+    global _latest_result, _latest_excel, _latest_intake
+    global _latest_service_level, _latest_lead_time
+
+    if _latest_intake is None or _latest_result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No processed data cached. Run the pipeline from Overview first.",
+        )
+    if not (0 < service_level <= 1):
+        raise HTTPException(status_code=400, detail="service_level must be between 0 and 1")
+    if lead_time is not None and lead_time < 1:
+        raise HTTPException(status_code=400, detail="lead_time must be >= 1")
+
+    try:
+        weekly = _build_weekly_from_intake(_latest_intake)
+
+        # Per-SKU lead time, mirroring the pipeline's lead_time_map logic
+        lead_time_map: dict[str, float] = {}
+        if "Lead Time" in _latest_intake.columns:
+            lead_time_map = (
+                _latest_intake.groupby("Item_Code")["Lead Time"]
+                .agg(lambda x: float(x.mode().iloc[0]) if not x.mode().empty else float(x.median()))
+                .fillna(float(_latest_lead_time))
+                .to_dict()
+            )
+
+        df = recompute_rol_columns(
+            _latest_result,
+            weekly,
+            service_level=service_level,
+            lead_time=_latest_lead_time if lead_time is None else lead_time,
+            lead_time_map=lead_time_map if lead_time_map else None,
+        )
+        _latest_result = df.copy()
+        _latest_excel = _df_to_excel_bytes(df)
+        _latest_service_level = service_level
+        _latest_lead_time = _latest_lead_time if lead_time is None else lead_time
+        _persist_cache()
+
+        return {
+            "rows": int(len(df)),
+            "columns": list(df.columns),
+            "data": df.to_dict(orient="records"),
+            "serviceLevel": service_level,
+            "leadTime": _latest_lead_time,
+        }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -212,6 +366,46 @@ def product(item_code: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found")
 
     return match.iloc[0].to_dict()
+
+
+@app.get("/product/{item_code}/rol-steps")
+def product_rol_steps(item_code: str) -> dict[str, object]:
+    """Return the step-by-step Static & Dynamic ROL calculation for one SKU.
+
+    Recomputes the trace on demand from the cached Order Intake using the
+    exact same helpers as the pipeline, so every intermediate value and the
+    final ROL agree with the numbers shown in the explorer table.
+    """
+    global _latest_intake, _latest_service_level, _latest_lead_time
+
+    if _latest_intake is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No intake data cached. Run the pipeline from Overview first.",
+        )
+
+    try:
+        weekly = _build_weekly_from_intake(_latest_intake)
+        # Per-SKU lead time, mirroring the pipeline exactly (truncated to int
+        # inside add_rol_columns so the trace always equals the table values)
+        lead_time = int(_latest_lead_time)
+        if "Lead Time" in _latest_intake.columns:
+            lt_rows = _latest_intake.loc[_latest_intake["Item_Code"] == item_code, "Lead Time"]
+            if not lt_rows.mode().empty:
+                lead_time = int(lt_rows.mode().iloc[0])
+        steps = compute_rol_steps_for_item(
+            weekly,
+            item_code,
+            service_level=_latest_service_level,
+            lead_time=lead_time,
+        )
+        if steps is None:
+            raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
+        return steps
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/download")

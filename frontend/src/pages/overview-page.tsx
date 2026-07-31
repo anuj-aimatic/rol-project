@@ -14,7 +14,7 @@ import {
   type PipelineResult,
 } from '@/services/state/processed-data-context'
 
-const STATE_KEY = 'overview_state_v2'
+const STATE_KEY = 'overview_state_v3'
 
 interface LocalState {
   selectedSheet: string
@@ -22,8 +22,18 @@ interface LocalState {
 }
 
 function readState(): LocalState {
+  const raw = (() => {
+    try {
+      return (
+        localStorage.getItem(STATE_KEY) ??
+        sessionStorage.getItem(STATE_KEY) ??
+        sessionStorage.getItem('overview_state_v2')
+      )
+    } catch {
+      return null
+    }
+  })()
   try {
-    const raw = sessionStorage.getItem(STATE_KEY)
     if (!raw) return { selectedSheet: '', serviceLevel: 0.85 }
     return JSON.parse(raw) as LocalState
   } catch {
@@ -41,9 +51,14 @@ export function OverviewPage() {
   const [serviceLevel, setServiceLevel] = useState(persisted.serviceLevel)
   const [loadingSheets, setLoadingSheets] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [recomputing, setRecomputing] = useState(false)
 
   useEffect(() => {
-    sessionStorage.setItem(STATE_KEY, JSON.stringify({ selectedSheet, serviceLevel }))
+    try {
+      localStorage.setItem(STATE_KEY, JSON.stringify({ selectedSheet, serviceLevel }))
+    } catch {
+      sessionStorage.setItem(STATE_KEY, JSON.stringify({ selectedSheet, serviceLevel }))
+    }
   }, [selectedSheet, serviceLevel])
 
   // Load cached sheets on mount
@@ -176,6 +191,55 @@ export function OverviewPage() {
     }
   }
 
+  /** Fast path: recompute only the ROL columns with the current service level. */
+  const recomputeRol = async () => {
+    if (!result) {
+      toast.error('Run the full analysis once before applying a service level.')
+      return
+    }
+    if (recomputing || processing) return
+
+    setRecomputing(true)
+    try {
+      const form = new FormData()
+      form.append('service_level', String(serviceLevel))
+
+      const res = await apiClient.post<{
+        rows: number
+        columns: string[]
+        data: PipelineResult['data']
+        serviceLevel: number
+        leadTime: number
+      }>('/recompute-rol', form, { timeout: 180_000 })
+
+      setResult({
+        ...result,
+        serviceLevel: res.data.serviceLevel,
+        leadTime: res.data.leadTime,
+        rows: res.data.rows,
+        columns: res.data.columns,
+        data: res.data.data,
+        processedAt: new Date().toISOString(),
+      })
+
+      toast.success(
+        `ROL recomputed at ${Math.round(res.data.serviceLevel * 100)}% — ${res.data.rows.toLocaleString()} products.`,
+      )
+    } catch (err) {
+      const msg = axios.isAxiosError(err)
+        ? err.response?.data?.detail || err.message
+        : 'Recompute failed.'
+      toast.error(msg)
+    } finally {
+      setRecomputing(false)
+    }
+  }
+
+  const appliedSlPct = result ? Math.round(result.serviceLevel * 100) : null
+  const inputSlPct = Math.round(serviceLevel * 100)
+  const slDirty =
+    result !== null && Math.abs(serviceLevel - result.serviceLevel) > 1e-9
+
   /* ---------- Render ---------- */
 
   return (
@@ -184,6 +248,24 @@ export function OverviewPage() {
         title="Overview"
         subtitle="Executive inventory briefing with ABC-RFM segmentation, risk signals, and ROL analysis."
       />
+
+      {slDirty && (
+        <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+          <span className="mt-0.5 text-amber-600 dark:text-amber-400">⚠</span>
+          <div>
+            <p className="font-medium text-amber-800 dark:text-amber-300">
+              Service level changed to {inputSlPct}% — results still show{' '}
+              {appliedSlPct}%
+            </p>
+            <p className="mt-0.5 text-xs text-amber-700/80 dark:text-amber-400/80">
+              Click <strong>Apply</strong> next to the service-level input to
+              recompute Dmax, safety stock and ROL for all products at{' '}
+              {inputSlPct}% in seconds — segmentation is unchanged. Or run the
+              full analysis again.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Pipeline Wizard */}
       <div className="mb-6">
@@ -259,15 +341,41 @@ export function OverviewPage() {
               <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
                 Service level
               </label>
-              <input
-                type="number"
-                min={0.01}
-                max={0.99}
-                step={0.01}
-                value={serviceLevel}
-                onChange={(e) => setServiceLevel(Number(e.target.value))}
-                className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-ring"
-              />
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={0.01}
+                  max={0.99}
+                  step={0.01}
+                  value={serviceLevel}
+                  onChange={(e) => setServiceLevel(Number(e.target.value))}
+                  className="h-11 w-full min-w-0 rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-ring"
+                />
+                {result && (
+                  <button
+                    type="button"
+                    onClick={recomputeRol}
+                    disabled={recomputing || processing}
+                    title="Recompute Dmax, safety stock and ROL for all products at this service level — fast, segmentation unchanged"
+                    className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-border px-3 text-xs font-medium hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {recomputing ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      'Apply'
+                    )}
+                  </button>
+                )}
+              </div>
+              {result && (
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Applied:{' '}
+                  <strong className="text-foreground">
+                    {Math.round(result.serviceLevel * 100)}%
+                  </strong>{' '}
+                  · change the value and click Apply to recompute ROL
+                </p>
+              )}
             </div>
 
             {/* Step 4: Run */}
@@ -307,7 +415,9 @@ export function OverviewPage() {
               {[
                 ['Products Analyzed', summaryStats.total.toLocaleString()],
                 ['Data Span', `${summaryStats.weeks} weeks`],
-                ['Sheet', result?.sheetName ?? '—'],
+                ['Sheet', result?.sheetName ?? '—'],                ['Service Level',
+                  result ? `${appliedSlPct}%` : '—',
+                ],
                 ['ABC — A / B / C', `${summaryStats.abc.A ?? 0} / ${summaryStats.abc.B ?? 0} / ${summaryStats.abc.C ?? 0}`],
                 ['RFM — Runner / Repeat / Dormant / Slow', 
                   `${summaryStats.rfm.Runner ?? 0} / ${summaryStats.rfm.Repeater ?? 0} / ${summaryStats.rfm.Dormant ?? 0} / ${summaryStats.rfm['Slow Mover'] ?? 0}`
@@ -328,6 +438,18 @@ export function OverviewPage() {
                 </div>
               ))}
             </div>
+
+            {/* Persistent service-level transparency note */}
+            {result && (
+              <p className="mt-4 rounded-lg border border-border bg-background/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                All ROL / safety-stock figures above were computed at a{' '}
+                <strong className="text-foreground">{appliedSlPct}%</strong>{' '}
+                service level. Low-volume items (total sales ≤ 300) use their
+                raw max weekly demand, so their ROL is unchanged by the service
+                level — the item detail page shows the full step-by-step
+                calculation for any SKU.
+              </p>
+            )}
           </ContentCard>
 
           <ContentCard
