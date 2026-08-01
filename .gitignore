@@ -8,17 +8,27 @@ build/
 .venv/
 venv/
 
-# === Data files (raw Excel sources) ===
+# === Data files (raw Excel sources) — never push client data to git ===
+data/
 data/*.xlsx
 data/~$*.xlsx
 
+# === Jupyter notebooks (analysis scratch — not part of the deployed app) ===
+notebook/
+.ipynb_checkpoints/
+
 # === Generated outputs ===
 output/
-notebook/*.xlsx
 *.csv
+*.xlsx
+*.pkl
+*.bin
 
-# === Jupyter ===
-.ipynb_checkpoints/
+# === Local pipeline cache (disk-backed cache written by the API) ===
+rol_pipeline_cache/
+
+# === Vercel ===
+.vercel/
 
 # === Temp / debug scripts ===
 backend/_check_sheets.py

@@ -1,6 +1,16 @@
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useEffect, useState } from 'react'
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
@@ -67,6 +77,20 @@ interface RolTrace {
   dynamic: RolTraceBlock
 }
 
+interface SensitivityPoint {
+  service_level: number
+  rol_static: number
+  rol_dynamic: number
+  dmax_static: number
+  dmax_dynamic: number
+}
+
+interface RolSensitivity {
+  item_code: string
+  lead_time: number
+  points: SensitivityPoint[]
+}
+
 /* ---------- Input chips ---------- */
 
 function InputChips({ inputs }: { inputs: Record<string, unknown> }) {
@@ -122,6 +146,134 @@ function WeeklyRecordsTable({ rows }: { rows: WeeklyRecord[] }) {
             </td>
           </tr>
         </tbody>
+      </table>
+    </div>
+  )
+}
+
+/* ---------- Coverage vs Shortfall table (where the ROL numbers come from) ---------- */
+
+interface CoverageRow extends WeeklyRecord {
+  staticShortfall: number
+  dynamicShortfall: number
+}
+
+function CoverageShortfallTable({
+  rows,
+  staticRol,
+  dynamicRol,
+}: {
+  rows: WeeklyRecord[]
+  staticRol: number
+  dynamicRol: number
+}) {
+  // The ROL spans a full reorder cycle (~4 weeks of demand), so the weekly
+  // demand ceiling it can absorb is ROL ÷ 4. This is the exact same model as
+  // the money-impact section (coverage = rol / 4), so the two reconcile.
+  const staticCoverage = staticRol / 4
+  const dynamicCoverage = dynamicRol / 4
+
+  const allData: CoverageRow[] = rows.map((r) => ({
+    ...r,
+    staticShortfall: Math.max(0, r.demand - staticCoverage),
+    dynamicShortfall: Math.max(0, r.demand - dynamicCoverage),
+  }))
+
+  // Only show the weeks where at least one policy has a shortfall — fully
+  // covered weeks add noise, not insight. Summaries still span every week.
+  const data = allData.filter((r) => r.staticShortfall > 0 || r.dynamicShortfall > 0)
+
+  const staticExceed = allData.filter((r) => r.staticShortfall > 0)
+  const dynamicExceed = allData.filter((r) => r.dynamicShortfall > 0)
+  const totalStaticShortfall = staticExceed.reduce((s, r) => s + r.staticShortfall, 0)
+  const totalDynamicShortfall = dynamicExceed.reduce((s, r) => s + r.dynamicShortfall, 0)
+
+  const fmt2 = (v: number) => v.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+
+  if (data.length === 0) {
+    return (
+      <p className="mt-2 rounded-lg border border-border bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+        No week exceeded weekly coverage (ROL ÷ 4) for either policy — zero shortfall across all observed weeks.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mt-2 overflow-x-auto rounded-lg border border-border">
+      <table className="min-w-full border-collapse text-xs">
+        <thead className="bg-muted/60">
+          <tr>
+            {['Year', 'Week', 'Weekly Demand (units)', `Static Coverage (${fmt2(staticCoverage)})`, `Dynamic Coverage (${fmt2(dynamicCoverage)})`, 'Static Shortfall', 'Dynamic Shortfall'].map((h) => (
+              <th
+                key={h}
+                className="whitespace-nowrap border-b border-border px-2 py-1 text-left font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r) => {
+            const staticOver = r.staticShortfall > 0
+            const dynamicOver = r.dynamicShortfall > 0
+            return (
+              <tr key={`${r.year}-${r.week}`} className="odd:bg-background even:bg-card/40">
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.year}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{r.week}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{fmt2(r.demand)}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{fmt2(staticCoverage)}</td>
+                <td className="border-b border-border/60 px-2 py-1 font-mono">{fmt2(dynamicCoverage)}</td>
+                <td
+                  className={`border-b border-border/60 px-2 py-1 font-mono ${
+                    staticOver ? 'font-semibold text-red-600 dark:text-red-400' : ''
+                  }`}
+                >
+                  {fmt2(r.staticShortfall)}
+                </td>
+                <td
+                  className={`border-b border-border/60 px-2 py-1 font-mono ${
+                    dynamicOver ? 'font-semibold text-red-600 dark:text-red-400' : ''
+                  }`}
+                >
+                  {fmt2(r.dynamicShortfall)}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+        <tfoot>
+          <tr className="bg-muted/40">
+            <td
+              colSpan={3}
+              className="border-t border-border px-2 py-1.5 text-[11px] font-semibold text-muted-foreground"
+            >
+              Weeks exceeding Static coverage: <span className="font-mono text-foreground">{staticExceed.length}</span>
+            </td>
+            <td
+              colSpan={4}
+              className="border-t border-border px-2 py-1.5 text-[11px] font-semibold text-muted-foreground"
+            >
+              Total Static shortfall:{' '}
+              <span className="font-mono text-foreground">{fmt2(totalStaticShortfall)} units</span>
+            </td>
+          </tr>
+          <tr className="bg-muted/40">
+            <td
+              colSpan={3}
+              className="border-t border-border/60 px-2 py-1.5 text-[11px] font-semibold text-muted-foreground"
+            >
+              Weeks exceeding Dynamic coverage: <span className="font-mono text-foreground">{dynamicExceed.length}</span>
+            </td>
+            <td
+              colSpan={4}
+              className="border-t border-border/60 px-2 py-1.5 text-[11px] font-semibold text-muted-foreground"
+            >
+              Total Dynamic shortfall:{' '}
+              <span className="font-mono text-foreground">{fmt2(totalDynamicShortfall)} units</span>
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   )
@@ -265,6 +417,61 @@ function RolBlock({ label, block }: { label: string; block: RolTraceBlock }) {
   )
 }
 
+/* ---------- Service-level what-if sensitivity chart ---------- */
+
+interface SensitivityRow extends SensitivityPoint {
+  sl: number
+}
+
+function RolSensitivityChart({ data, appliedLevel }: { data: RolSensitivity; appliedLevel: number }) {
+  const chartData: SensitivityRow[] = data.points.map((p) => ({
+    ...p,
+    sl: Math.round(p.service_level * 100),
+  }))
+
+  return (
+    <div className="mt-3 h-80 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+          <XAxis
+            dataKey="sl"
+            fontSize={11}
+            tickFormatter={(v) => `${v}%`}
+            interval={0}
+            label={{ value: 'Service level', position: 'insideBottom', offset: -4, fontSize: 11 }}
+          />
+          <YAxis fontSize={11} label={{ value: 'ROL (units)', angle: -90, position: 'insideLeft', fontSize: 11 }} />
+          <Tooltip
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null
+              const p = payload[0].payload as SensitivityRow
+              return (
+                <div className="rounded-xl border border-border bg-card px-3 py-2 text-xs shadow-lg">
+                  <p className="font-semibold text-foreground">Service level {String(label)}%</p>
+                  <p className="text-muted-foreground">Static ROL: {p.rol_static} units</p>
+                  <p className="text-muted-foreground">Dynamic ROL: {p.rol_dynamic} units</p>
+                  <p className="text-muted-foreground">Dmax: {p.dmax_static} (S) / {p.dmax_dynamic} (D)</p>
+                </div>
+              )
+            }}
+          />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Line type="monotone" dataKey="rol_static" name="Static ROL" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="monotone" dataKey="rol_dynamic" name="Dynamic ROL" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} />
+        </LineChart>
+      </ResponsiveContainer>
+      {appliedLevel > 0 && (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Currently applied service level: <strong>{Math.round(appliedLevel * 100)}%</strong> — the curves are
+          recomputed with the same math as the table values, so each point matches the ROL you'd get by applying
+          that service level.
+        </p>
+      )}
+    </div>
+  )
+}
+
 /* ---------- Static vs Dynamic — money impact scenario ---------- */
 
 function inr(v: number): string {
@@ -361,10 +568,12 @@ function StaticVsDynamicScenario({ row, trace }: { row: Record<string, unknown>;
               {rol} units{hasMoney ? ` ≈ ${inr(sc.stockValue)}` : ''}
             </p>
             <ul className="mt-2 space-y-1 text-[11px] text-muted-foreground">
-              <li>Weekly coverage ≈ {sc.coverage.toFixed(1)} units (ROL ÷ 4)</li>
+              <li>Weekly coverage ≈ {sc.coverage.toLocaleString('en-IN', { maximumFractionDigits: 2 })} units (ROL ÷ 4)</li>
               <li>
                 Stockout exposure:{' '}
-                {hasWeekly ? `${sc.exposedWeeks} of ${weekly.length} weeks · ${sc.unmetUnits.toFixed(1)} units` : '—'}
+                {hasWeekly
+                  ? `${sc.exposedWeeks} of ${weekly.length} weeks · ${sc.unmetUnits.toLocaleString('en-IN', { maximumFractionDigits: 2 })} units`
+                  : '—'}
               </li>
               {hasMoney && hasWeekly && (
                 <li>
@@ -450,6 +659,8 @@ export function ProductDetailPage() {
   const [trace, setTrace] = useState<RolTrace | null>(null)
   const [loadingSteps, setLoadingSteps] = useState(false)
   const [stepsError, setStepsError] = useState<string | null>(null)
+  const [sensitivity, setSensitivity] = useState<RolSensitivity | null>(null)
+  const [sensitivityError, setSensitivityError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!itemCode) return
@@ -471,6 +682,34 @@ export function ProductDetailPage() {
         }
       } finally {
         if (!cancelled) setLoadingSteps(false)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [itemCode])
+
+  // Service-level sensitivity sweep (what-if chart)
+  useEffect(() => {
+    if (!itemCode) return
+    let cancelled = false
+    setSensitivityError(null)
+    const load = async () => {
+      try {
+        const res = await apiClient.get<RolSensitivity>(
+          `/product/${encodeURIComponent(itemCode)}/rol-sensitivity`,
+        )
+        if (!cancelled) setSensitivity(res.data)
+      } catch (err) {
+        if (!cancelled) {
+          setSensitivity(null)
+          setSensitivityError(
+            err && typeof err === 'object' && 'response' in err
+              ? String((err as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? '')
+              : 'Could not load service-level sensitivity.',
+          )
+        }
       }
     }
     void load()
@@ -633,6 +872,57 @@ export function ProductDetailPage() {
               No calculation trace available for this item.
             </p>
           )}
+        </ContentCard>
+      </div>
+
+      {/* What-if sensitivity — service level vs ROL (Static & Dynamic) */}
+      <div className="mb-4">
+        <ContentCard
+          title="What-if — Service Level Sensitivity"
+          description="How Static & Dynamic ROL respond as the target service level changes from 50% to 95%."
+        >
+          {sensitivity && (
+            <RolSensitivityChart
+              data={sensitivity}
+              appliedLevel={trace?.service_level ?? result.serviceLevel}
+            />
+          )}
+          {!sensitivity && !sensitivityError && (
+            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 size={16} className="animate-spin" />
+              Computing service-level sensitivity…
+            </div>
+          )}
+          {sensitivityError && (
+            <p className="py-2 text-xs text-muted-foreground">{sensitivityError}</p>
+          )}
+        </ContentCard>
+      </div>
+
+      {/* Coverage vs shortfall — the weeks that actually break through coverage */}
+      <div className="mb-4">
+        <ContentCard
+          title="Coverage vs Shortfall — weekly demand vs each ROL policy"
+          description="Weeks where weekly demand exceeded the policy's weekly coverage (ROL ÷ 4). Only weeks with a shortfall are shown — these are the ones that drain safety stock."
+        >
+          {trace && trace.weekly_records && trace.weekly_records.length > 0 && (
+            <CoverageShortfallTable
+              rows={trace.weekly_records}
+              staticRol={trace.static.result.rol}
+              dynamicRol={trace.dynamic.result.rol}
+            />
+          )}
+          {!trace && (
+            <p className="py-4 text-sm text-muted-foreground">
+              Load the calculation trace (above) to see the coverage breakdown for this item.
+            </p>
+          )}
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            <strong>Weekly coverage = ROL ÷ 4</strong> — the ROL spans a full reorder cycle, so its weekly demand
+            ceiling is the ROL divided by 4 weeks. A week is a <strong>shortfall</strong> when demand exceeds that
+            weekly coverage; the shortfall is the uncovered demand in units. These are the same exposed weeks and
+            shortfall units the money-impact section below counts, so the two reconcile exactly.
+          </p>
         </ContentCard>
       </div>
 

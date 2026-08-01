@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from backend.customer_analytics import run_customer_analytics
 from backend.data_loader import load_order_intake
 from backend.pipeline import _build_weekly_from_intake, run_pipeline
-from backend.rol_calculator import compute_rol_steps_for_item, recompute_rol_columns
+from backend.rol_calculator import compute_rol_sensitivity, compute_rol_steps_for_item, recompute_rol_columns
 
 app = FastAPI(title="Inventory Analytics API", version="2.0.0")
 
@@ -402,6 +402,40 @@ def product_rol_steps(item_code: str) -> dict[str, object]:
         if steps is None:
             raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
         return steps
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/product/{item_code}/rol-sensitivity")
+def product_rol_sensitivity(item_code: str) -> dict[str, object]:
+    """Return Static & Dynamic ROL across a sweep of service levels (what-if).
+
+    X axis = service level (50% → 95%), Y axis = ROL (units). Used by the
+    product detail page's sensitivity chart. Recomputed on demand from the
+    cached Order Intake with the exact same helpers as the pipeline.
+    """
+    global _latest_intake, _latest_lead_time
+
+    if _latest_intake is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No intake data cached. Run the pipeline from Overview first.",
+        )
+
+    try:
+        weekly = _build_weekly_from_intake(_latest_intake)
+        # Per-SKU lead time, mirroring the pipeline (truncated to int)
+        lead_time = int(_latest_lead_time)
+        if "Lead Time" in _latest_intake.columns:
+            lt_rows = _latest_intake.loc[_latest_intake["Item_Code"] == item_code, "Lead Time"]
+            if not lt_rows.mode().empty:
+                lead_time = int(lt_rows.mode().iloc[0])
+        points = compute_rol_sensitivity(weekly, item_code, lead_time=lead_time)
+        if points is None:
+            raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
+        return {"item_code": item_code, "lead_time": lead_time, "points": points}
     except HTTPException:
         raise
     except Exception as exc:

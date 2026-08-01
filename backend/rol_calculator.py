@@ -123,6 +123,54 @@ def _rol_metrics(d_avg_week: float, d_max_week: float, lead_time: float) -> dict
 # Per-SKU ROL (single item)
 # ---------------------------------------------------------------------------
 
+SENSITIVITY_LEVELS = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+
+
+def compute_rol_sensitivity(
+    weekly: pd.DataFrame,
+    item_code: str,
+    service_levels: list[float] | None = None,
+    lead_time: float = DEFAULT_LEAD_TIME_WEEKS,
+) -> list[dict[str, float]] | None:
+    """Compute Static & Dynamic ROL across a sweep of service levels.
+
+    Used for the "what-if" sensitivity chart on the product detail page —
+    X axis = service level, Y axis = ROL, one line per policy. Reuses the
+    exact same math as the pipeline (``_rol_metrics_for_series``) so the
+    curve always agrees with the numbers in the explorer table.
+
+    Returns ``None`` when the item has no weekly demand records.
+    """
+    w = weekly[weekly["Item Code"] == item_code]
+    if w.empty:
+        return None
+
+    levels = service_levels or SENSITIVITY_LEVELS
+    total_weeks = _compute_total_weeks(weekly)
+    vals = w["Weekly Demand"]
+    total_sales = float(vals.sum())
+
+    static_bin = _volume_logic(total_sales)
+    mode_of_weekly = int(vals.mode().iloc[0]) if not vals.mode().empty else 0
+    if mode_of_weekly <= 0:
+        mode_of_weekly = 1
+
+    points: list[dict[str, float]] = []
+    for sl in levels:
+        static_res = _rol_metrics_for_series(vals, static_bin, total_weeks, sl, lead_time)
+        dynamic_res = _rol_metrics_for_series(vals, mode_of_weekly, total_weeks, sl, lead_time)
+        points.append(
+            {
+                "service_level": round(sl, 2),
+                "rol_static": static_res["rol"],
+                "rol_dynamic": dynamic_res["rol"],
+                "dmax_static": static_res["d_max_week"],
+                "dmax_dynamic": dynamic_res["d_max_week"],
+            }
+        )
+    return points
+
+
 def compute_rol_for_item(
     weekly: pd.DataFrame,
     item_code: str,
