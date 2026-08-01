@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.customer_analytics import run_customer_analytics
 from backend.data_loader import load_order_intake
+from backend.fg_stock import enrich_with_fg_stock
 from backend.pipeline import _build_weekly_from_intake, run_pipeline
 from backend.rol_calculator import compute_rol_sensitivity, compute_rol_steps_for_item, recompute_rol_columns
 
@@ -310,6 +311,10 @@ async def recompute_rol(
             lead_time=_latest_lead_time if lead_time is None else lead_time,
             lead_time_map=lead_time_map if lead_time_map else None,
         )
+
+        # ROL-driven FG Stock columns must track the new service level
+        df = enrich_with_fg_stock(df)
+
         _latest_result = df.copy()
         _latest_excel = _df_to_excel_bytes(df)
         _latest_service_level = service_level

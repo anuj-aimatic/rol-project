@@ -1,7 +1,8 @@
 """End-to-end pipeline: ABC + RFM + Risk combined at SKU level, then ROL from intake data.
 
 Produces a single CSV matching the structure of ``sheet_m2h2_sku_final_abc_rfm_risk.csv``
-with two extra columns: ``rol_static`` and ``rol_dynamic``.
+with two extra columns: ``rol_static`` and ``rol_dynamic``, plus the
+FG-Stock-derived valuation, deficit, and coverage columns.
 
 All data (segmentation + ROL) comes from the **same** Order Intake Excel file,
 ensuring Item_Code consistency across every stage.
@@ -13,6 +14,7 @@ import pandas as pd
 
 from backend.config import DEFAULT_INTAKE_FILE, DEFAULT_INTAKE_SHEET
 from backend.data_loader import load_order_intake
+from backend.fg_stock import enrich_with_fg_stock
 from backend.risk_analysis import compute_product_risk
 from backend.hierarchical_abc import run_hierarchical_abc
 from backend.rfm_analysis import run_rfm
@@ -129,7 +131,7 @@ def run_pipeline(
     print(f"       Combined: {len(final)} SKU rows")
 
     # ---- Step 6: Build weekly demand from the SAME intake data and compute ROL ----
-    print("[6/6] Computing ROL (static & dynamic) from intake data...")
+    print("[6/7] Computing ROL (static & dynamic) from intake data...")
     weekly = _build_weekly_from_intake(intake)
     print(f"       Weekly demand records: {len(weekly)}")
 
@@ -158,6 +160,11 @@ def run_pipeline(
         final["lead_time"] = final["Item_Code"].map(lead_time_per_sku).fillna(float(lead_time)).astype(int)
 
     print(f"       Done! {len(final)} rows, {len(final.columns)} columns")
+
+    # ---- Step 7: Merge FG Stock and derive valuation / deficit / coverage ----
+    print("[7/7] Enriching with FG Stock (valuation, deficit, coverage)...")
+    final = enrich_with_fg_stock(final)
+    print(f"       Final: {len(final)} rows, {len(final.columns)} columns")
 
     if output_path:
         final.to_csv(output_path, index=False)

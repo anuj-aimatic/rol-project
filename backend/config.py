@@ -6,6 +6,13 @@ from __future__ import annotations
 DEFAULT_INTAKE_FILE = "notebook/Order Intake Incl Amounts.xlsx"
 DEFAULT_INTAKE_SHEET = "M1"  # or "M2&H2"
 
+# FG Stock export (open stock per SKU, mapped on Item_Code)
+DEFAULT_FG_STOCK_FILE = "data/FG Stock as on 31-Jul-26.xlsx"
+DEFAULT_FG_STOCK_SHEET = "Export"  # first sheet if missing
+
+# Fraction of unit sales price used as unit cost for stock/deficit valuation
+UNIT_COST_FACTOR = 0.65
+
 # Service level & lead time
 DEFAULT_SERVICE_LEVEL = 0.65
 DEFAULT_LEAD_TIME_WEEKS = 4

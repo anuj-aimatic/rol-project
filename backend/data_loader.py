@@ -1,8 +1,9 @@
-"""Data loading functions — currently only Order Intake data is needed.
+"""Data loading functions — Order Intake + FG Stock export.
 
 Both the segmentation (ABC/RFM/Risk) AND the ROL calculation derive
 their data from the same Order Intake file, ensuring Item_Code
-consistency across all stages.
+consistency across all stages. The FG Stock export is merged on
+Item_Code to enrich the product table with open-stock valuation.
 """
 
 from __future__ import annotations
@@ -11,6 +12,54 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from backend.config import DEFAULT_FG_STOCK_FILE, DEFAULT_FG_STOCK_SHEET
+
+
+def load_fg_stock(
+    file_path: str | Path = DEFAULT_FG_STOCK_FILE,
+    sheet_name: str | int | None = None,
+) -> pd.DataFrame:
+    """Load the FG Stock export and return Item_Code + Open FG Stock.
+
+    Parameters
+    ----------
+    file_path : str | Path
+        Path to the FG Stock Excel file.
+    sheet_name : str | int | None
+        Sheet to read; defaults to ``DEFAULT_FG_STOCK_SHEET`` and falls
+        back to the first sheet if that name is absent.
+
+    Returns
+    -------
+    pd.DataFrame
+        Two-column frame (``Item_Code``, ``Open FG Stock``). Unmatched
+        SKUs get ``Open FG Stock = 0`` downstream at merge time.
+    """
+    # Resolve the sheet to read: configured name first, else first sheet
+    sheet = sheet_name
+    if sheet is None:
+        xl = pd.ExcelFile(file_path)
+        if DEFAULT_FG_STOCK_SHEET in xl.sheet_names:
+            sheet = DEFAULT_FG_STOCK_SHEET
+        elif xl.sheet_names:
+            sheet = xl.sheet_names[0]
+    df = pd.read_excel(file_path, sheet_name=sheet)
+
+    cols = {str(c).strip(): c for c in df.columns}
+    item_col = cols.get("Item_Code")
+    stock_col = cols.get("Open FG Stock")
+    if item_col is None or stock_col is None:
+        raise ValueError(
+            f"FG Stock file must contain 'Item_Code' and 'Open FG Stock' columns; got {list(df.columns)}"
+        )
+
+    out = pd.DataFrame({"Item_Code": df[item_col], "Open FG Stock": pd.to_numeric(df[stock_col], errors="coerce")})
+    out = out.dropna(subset=["Item_Code"])
+    # Aggregate duplicates (defensive — a SKU should appear once, but sum if not)
+    out = out.groupby("Item_Code", as_index=False)["Open FG Stock"].sum()
+    out["Item_Code"] = out["Item_Code"].astype(str).str.strip()
+    return out
 
 
 def load_order_intake(
