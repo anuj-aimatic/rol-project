@@ -113,7 +113,11 @@ def _compute_dmax(freq_df: pd.DataFrame, service_level: float) -> float:
 
 
 def _rol_metrics(d_avg_week: float, d_max_week: float, lead_time: float) -> dict[str, float]:
-    """Compute safety stock and reorder level. ROL is always rounded to integer (count of product)."""
+    """Compute safety stock and reorder level. ROL is always rounded to integer (count of product).
+
+    ``lead_time`` must be expressed in **weeks** — callers convert the intake
+    ``Lead Time`` column (which is in days) to weeks before calling this.
+    """
     ss = (d_max_week - d_avg_week) * lead_time
     rol_monthly = (d_avg_week * 4) + ss
     return {"rol": float(round(rol_monthly)), "ss": round(ss, 2), "dmax": round(d_max_week, 2)}
@@ -261,8 +265,15 @@ def add_rol_columns(
     service_level: float = DEFAULT_SERVICE_LEVEL,
     lead_time: int = DEFAULT_LEAD_TIME_WEEKS,
     lead_time_map: dict[str, float] | None = None,
+    service_level_map: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Add ``rol_static``, ``rol_dynamic`` and detailed ROL metric columns.
+
+    ``service_level_map`` (optional) maps a ``Risk_Category`` to the service
+    level used for that SKU's Dmax / safety stock / ROL — i.e. risk-based
+    mode. When ``None``, the single global ``service_level`` is used for
+    every SKU (legacy behaviour). The level actually applied per SKU is
+    recorded in a new ``service_level`` column.
 
     For each SKU the following groups of columns are appended:
 
@@ -285,6 +296,11 @@ def add_rol_columns(
         ic: g["Weekly Demand"] for ic, g in weekly.groupby("Item Code")
     }
 
+    # Per-SKU Risk_Category lookup (one pass) for risk-based service levels
+    risk_by_item: dict[str, str] = {}
+    if service_level_map and "Risk_Category" in df.columns:
+        risk_by_item = df.set_index("Item_Code")["Risk_Category"].astype(str).to_dict()
+
     # Prepare dicts for every metric column
     metrics: dict[str, dict[str, float]] = {ic: {} for ic in item_codes}
 
@@ -292,9 +308,15 @@ def add_rol_columns(
         m = metrics[ic]
         item_vals = weekly_by_item.get(ic)
 
-        # Use per-SKU lead time from data, fall back to global default
+        # Use per-SKU lead time from data, fall back to global default.
+        # Stored as integer weeks (truncated) so the displayed lead_time column
+        # always matches the exact value used in the ROL math and the trace.
         item_lt = lead_time_map.get(ic, float(lead_time)) if lead_time_map else float(lead_time)
-        m["lead_time"] = item_lt
+        m["lead_time"] = int(item_lt)
+
+        # Use per-SKU service level from the risk map, fall back to global default
+        item_sl = service_level_map.get(risk_by_item.get(ic), service_level) if service_level_map else service_level
+        m["service_level"] = item_sl
 
         if item_vals is None or item_vals.empty:
             for prefix in ("st_", "dy_"):
@@ -331,7 +353,7 @@ def add_rol_columns(
         #      original pipeline so recompute never drifts from table values) -----
         static_bin = _volume_logic(item_sales)
         static_res = _rol_metrics_for_series(
-            item_vals, static_bin, total_weeks_global, service_level, int(item_lt)
+            item_vals, static_bin, total_weeks_global, item_sl, int(item_lt)
         )
         d_avg = static_res["d_avg_week"]
         d_max = static_res["d_max_week"]
@@ -347,7 +369,7 @@ def add_rol_columns(
         # ----- Dynamic ROL (uses per-SKU lead time, truncated to int) -----
         dynamic_bin = mode_of_weekly
         dynamic_res = _rol_metrics_for_series(
-            item_vals, dynamic_bin, total_weeks_global, service_level, int(item_lt)
+            item_vals, dynamic_bin, total_weeks_global, item_sl, int(item_lt)
         )
         d_avg = dynamic_res["d_avg_week"]
         d_max = dynamic_res["d_max_week"]
@@ -369,6 +391,11 @@ def add_rol_columns(
         lambda ic: max(0, total_weeks_global - metrics[ic].get("st_weeks_with_orders", 0))
     )
 
+    # ---- Service level actually applied per SKU (global or risk-based) ----
+    df["service_level"] = df["Item_Code"].map(
+        lambda ic: metrics[ic].get("service_level", service_level)
+    )
+
     # ---- Build all metric columns in order ----
     for col in ROL_COLUMNS:
         if col not in df.columns:  # skip already-added columns
@@ -383,14 +410,15 @@ def recompute_rol_columns(
     service_level: float = DEFAULT_SERVICE_LEVEL,
     lead_time: int = DEFAULT_LEAD_TIME_WEEKS,
     lead_time_map: dict[str, float] | None = None,
+    service_level_map: dict[str, float] | None = None,
 ) -> pd.DataFrame:
-    """Recompute only the ROL columns of an existing output with a new service level.
+    """Recompute only the ROL columns of an existing output with new service levels.
 
     Drops the ROL columns (``ROL_COLUMNS``) from the input and re-runs
     ``add_rol_columns`` against the cached weekly demand. Segmentation,
     ABC/RFM/Risk and all non-ROL columns are left untouched, so this is a fast
-    service-level "what-if" path — the demand planner can apply any value
-    without re-running the full pipeline.
+    service-level "what-if" path — the demand planner can apply a global value
+    or per-risk-category levels without re-running the full pipeline.
     """
     out = df.copy()
     drop = [c for c in ROL_COLUMNS if c in out.columns]
@@ -402,6 +430,7 @@ def recompute_rol_columns(
         service_level=service_level,
         lead_time=lead_time,
         lead_time_map=lead_time_map,
+        service_level_map=service_level_map,
     )
 
 

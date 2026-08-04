@@ -287,6 +287,49 @@ def compute_multi_product_sankey(
     }
 
 
+def compute_sku_customer_type(df: pd.DataFrame) -> pd.DataFrame:
+    """Classify each SKU by who buys it: Internal, External, or Internal + External.
+
+    Unlike the product-group ``Risk_Category`` (which reflects only the
+    *largest* customer of the group), this tags every party that ordered the
+    SKU using the internal customer master and reports the full set of
+    customer types that buy it.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Order Intake with ``Item_Code`` and ``Party_Code`` columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per ``Item_Code`` with a ``Customer Type`` column:
+        ``"Internal"``, ``"External"``, or ``"Internal + External"``.
+    """
+    tag = pd.DataFrame(
+        {
+            "Item_Code": df["Item_Code"],
+            "_type": df["Party_Code"].apply(_tag_internal),
+        }
+    )
+    types_by_sku = (
+        tag.groupby("Item_Code")["_type"]
+        .agg(lambda s: tuple(sorted(set(s))))
+        .reset_index()
+    )
+
+    def _label(types: tuple[str, ...]) -> str:
+        if not types:
+            return "No Orders"
+        if len(types) == 1:
+            return types[0]
+        return "Internal + External"
+
+    out = types_by_sku.copy()
+    out["Customer Type"] = out["_type"].map(_label)
+    return out[["Item_Code", "Customer Type"]]
+
+
 def compute_internal_external_product_view(df: pd.DataFrame) -> list[dict[str, Any]]:
     """Compare product revenue split between Internal and External customers.
 

@@ -1,0 +1,47 @@
+Column
+
+Formula
+
+Open FG Stock
+
+July FG Stock mapped on Item_Code
+
+Deficit Stock (S)
+
+max(0, rol_static - Open FG Stock)
+
+Deficit Stock (D)
+
+max(0, rol_dynamic - Open FG Stock)
+
+Unit Cost (65%) (S)
+
+(Monetary / st_total_sales) × 0.65
+
+Unit Cost (65%) (D)
+
+(Monetary / dy_total_sales) × 0.65
+
+FG Inventory Value (S)
+
+Open FG Stock × Unit Cost (S)
+
+FG Inventory Value (D)
+
+Open FG Stock × Unit Cost (D)
+
+Deficit Cost (S)
+
+Deficit Stock (S) × Unit Cost (S)
+
+Deficit Cost (D)
+
+Deficit Stock (D) × Unit Cost (D)
+
+Coverage Weeks (S)
+
+rol_static ÷ st_avg_weekly_demand
+
+Coverage Weeks (D)
+
+rol_dynamic ÷ dy_avg_weekly_demand

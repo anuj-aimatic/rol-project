@@ -26,6 +26,10 @@ export interface PipelineResult {
   data: InventoryRecord[]
   processedAt: string
   customerAnalytics?: CustomerAnalyticsData
+  /** "global" (single level for all SKUs) or "risk" (per Risk_Category level). */
+  serviceLevelMode?: 'global' | 'risk'
+  /** Risk_Category → service level (fraction) when serviceLevelMode === 'risk'. */
+  riskServiceLevels?: Record<string, number> | null
 }
 
 interface ProcessedDataContextValue {

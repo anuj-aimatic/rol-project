@@ -9,32 +9,61 @@ import { apiClient } from '@/services/api/client'
 export function ReportsPage() {
   const { result } = useProcessedData()
 
-  const handleDownloadCsv = () => {
+  /** Build a CSV client-side from the in-memory result (fallback path). */
+  const buildClientCsv = () => {
+    if (!result) return null
+    const headers = result.columns.join(',')
+    const rows = result.data.map((row) =>
+      result.columns
+        .map((col) => {
+          const v = row[col]
+          if (v === null || v === undefined) return ''
+          const s = String(v)
+          // Escape commas and quotes
+          return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s
+        })
+        .join(','),
+    )
+    return [headers, ...rows].join('\n')
+  }
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadCsv = async () => {
     if (!result) {
       toast.error('No data to export. Run the pipeline first.')
       return
     }
+
+    const filename = `pipeline_output_${result.sheetName}.csv`
+
+    // Prefer the backend's authoritative result so the export always matches
+    // the latest run/recompute (never a stale localStorage/sessionStorage copy).
     try {
-      const headers = result.columns.join(',')
-      const rows = result.data.map((row) =>
-        result.columns
-          .map((col) => {
-            const v = row[col]
-            if (v === null || v === undefined) return ''
-            const s = String(v)
-            // Escape commas and quotes
-            return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s
-          })
-          .join(','),
-      )
-      const csv = [headers, ...rows].join('\n')
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `pipeline_output_${result.sheetName}.csv`
-      a.click()
-      URL.revokeObjectURL(url)
+      const response = await apiClient.get('/download', {
+        params: { format: 'csv' },
+        responseType: 'blob',
+        timeout: 120_000,
+      })
+      triggerDownload(response.data, filename)
+      toast.success(`Exported ${result.rows.toLocaleString()} rows to CSV.`)
+      return
+    } catch {
+      // Backend unavailable / not processed yet — fall back to client-side data.
+    }
+
+    try {
+      const csv = buildClientCsv()
+      if (csv === null) return
+      // UTF-8 BOM so Excel renders ₹ values correctly in the fallback too
+      triggerDownload(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }), filename)
       toast.success(`Exported ${result.rows.toLocaleString()} rows to CSV.`)
     } catch {
       toast.error('Failed to generate CSV.')

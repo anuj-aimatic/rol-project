@@ -1,8 +1,9 @@
 """End-to-end pipeline: ABC + RFM + Risk combined at SKU level, then ROL from intake data.
 
 Produces a single CSV matching the structure of ``sheet_m2h2_sku_final_abc_rfm_risk.csv``
-with two extra columns: ``rol_static`` and ``rol_dynamic``, plus the
-FG-Stock-derived valuation, deficit, and coverage columns.
+with the extra ROL columns (``rol_static``, ``rol_dynamic``, ``service_level``),
+per-SKU ``Customer Type``, and the FG-Stock-derived valuation, deficit, and
+coverage columns.
 
 All data (segmentation + ROL) comes from the **same** Order Intake Excel file,
 ensuring Item_Code consistency across every stage.
@@ -12,7 +13,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from backend.config import DEFAULT_INTAKE_FILE, DEFAULT_INTAKE_SHEET
+from backend.config import DAYS_PER_WEEK, DEFAULT_INTAKE_FILE, DEFAULT_INTAKE_SHEET
+from backend.customer_analytics import compute_sku_customer_type
 from backend.data_loader import load_order_intake
 from backend.fg_stock import enrich_with_fg_stock
 from backend.risk_analysis import compute_product_risk
@@ -39,6 +41,8 @@ def run_pipeline(
     intake_sheet: str = DEFAULT_INTAKE_SHEET,
     service_level: float = 0.85,
     lead_time: int = 4,
+    service_level_map: dict[str, float] | None = None,
+    fg_stock: pd.DataFrame | None = None,
     output_path: str | None = None,
 ) -> pd.DataFrame:
     """Run the full ABC-RFM-Risk-ROL pipeline using a single Order Intake file.
@@ -50,9 +54,17 @@ def run_pipeline(
     intake_sheet : str
         Sheet name to use (``"M1"`` or ``"M2&H2"``).
     service_level : float
-        Service level for ROL (default 0.85).
+        Global service level for ROL (default 0.85). Used for every SKU when
+        ``service_level_map`` is ``None``, and as the fallback for SKUs whose
+        Risk_Category is not present in the map.
     lead_time : int
         Lead time in weeks (default 4).
+    service_level_map : dict[str, float] | None
+        Optional per-Risk_Category service levels (risk-based mode). When
+        provided, each SKU uses the level of its own Risk_Category.
+    fg_stock : pd.DataFrame | None
+        Optional preloaded FG Stock export (``Item_Code`` + ``Open FG Stock``).
+        When provided it is used instead of the default FG Stock file.
     output_path : str, optional
         If provided, saves the final CSV to this path.
 
@@ -103,6 +115,12 @@ def run_pipeline(
     mode_qty["mode_valid"] = mode_qty["mode_order_qty"] > 0
     combined = combined.merge(mode_qty, on="Item_Code", how="left")
 
+    # Compute per-SKU Customer Type (Internal / External / Internal + External)
+    print("       Computing Customer Type per SKU...")
+    combined = combined.merge(
+        compute_sku_customer_type(intake), on="Item_Code", how="left"
+    )
+
     # Build final columns matching target CSV structure
     final = pd.DataFrame()
     final["Item_Category_Code"] = combined["Item_Category_Code"]
@@ -125,6 +143,7 @@ def run_pipeline(
     final["Contribution (%)"] = combined["Contribution (%)"]
     final["Cumulative Contribution (%)"] = combined["Cumulative Contribution (%)"]
     final["Risk_Category"] = combined["Risk_Category"]
+    final["Customer Type"] = combined["Customer Type"]
     final["mode_order_qty"] = combined["mode_order_qty"]
     final["mode_valid"] = combined["mode_valid"]
 
@@ -135,12 +154,16 @@ def run_pipeline(
     weekly = _build_weekly_from_intake(intake)
     print(f"       Weekly demand records: {len(weekly)}")
 
-    # Extract per-SKU lead time from intake data (mode per SKU)
+    # Extract per-SKU lead time from intake data (mode per SKU).
+    # NOTE: the intake "Lead Time" column is in DAYS (e.g. 21, 28, 50) — convert
+    # to weeks first, then fall back to the global weeks default for SKUs with
+    # no lead-time value.
     if "Lead Time" in intake.columns:
         lead_time_per_sku: dict[str, float] = (
             intake.groupby("Item_Code")["Lead Time"]
             .agg(lambda x: float(x.mode().iloc[0]) if not x.mode().empty else float(x.median()))
-            .fillna(lead_time)
+            .div(DAYS_PER_WEEK)  # days -> weeks
+            .fillna(float(lead_time))
             .to_dict()
         )
         print(f"       Per-SKU lead times extracted for {len(lead_time_per_sku)} items")
@@ -153,6 +176,7 @@ def run_pipeline(
         service_level=service_level,
         lead_time=lead_time,
         lead_time_map=lead_time_per_sku if lead_time_per_sku else None,
+        service_level_map=service_level_map,
     )
 
     # Ensure lead_time column is present in final output
@@ -163,7 +187,7 @@ def run_pipeline(
 
     # ---- Step 7: Merge FG Stock and derive valuation / deficit / coverage ----
     print("[7/7] Enriching with FG Stock (valuation, deficit, coverage)...")
-    final = enrich_with_fg_stock(final)
+    final = enrich_with_fg_stock(final, fg_stock=fg_stock)
     print(f"       Final: {len(final)} rows, {len(final.columns)} columns")
 
     if output_path:

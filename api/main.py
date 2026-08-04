@@ -20,7 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from backend.customer_analytics import run_customer_analytics
-from backend.data_loader import load_order_intake
+from backend.config import DAYS_PER_WEEK, DEFAULT_RISK_SERVICE_LEVELS
+from backend.data_loader import load_fg_stock, load_order_intake
 from backend.fg_stock import enrich_with_fg_stock
 from backend.pipeline import _build_weekly_from_intake, run_pipeline
 from backend.rol_calculator import compute_rol_sensitivity, compute_rol_steps_for_item, recompute_rol_columns
@@ -41,7 +42,10 @@ _latest_excel: bytes | None = None
 _latest_workbook: bytes | None = None
 _latest_sheets: list[str] | None = None
 _latest_intake: pd.DataFrame | None = None  # cached Order Intake for customer analytics
+_latest_fg_stock: pd.DataFrame | None = None  # cached FG Stock export (uploaded or default)
 _latest_service_level: float = 0.85
+_latest_service_level_mode: str = "global"  # "global" | "risk"
+_latest_risk_service_levels: dict[str, float] | None = None
 _latest_lead_time: int = 4
 
 # ---- Disk-backed cache (survives API restarts) ----
@@ -67,13 +71,20 @@ def _persist_cache() -> None:
                 json.dump(_latest_sheets, f)
         with open(_cache_path("params.json"), "w") as f:
             json.dump(
-                {"service_level": _latest_service_level, "lead_time": _latest_lead_time},
+                {
+                    "service_level": _latest_service_level,
+                    "lead_time": _latest_lead_time,
+                    "service_level_mode": _latest_service_level_mode,
+                    "risk_service_levels": _latest_risk_service_levels,
+                },
                 f,
             )
         if _latest_result is not None:
             _latest_result.to_pickle(_cache_path("result.pkl"))
         if _latest_intake is not None:
             _latest_intake.to_pickle(_cache_path("intake.pkl"))
+        if _latest_fg_stock is not None:
+            _latest_fg_stock.to_pickle(_cache_path("fg_stock.pkl"))
     except Exception:
         # Cache is best-effort; never crash a request because of it
         pass
@@ -82,7 +93,9 @@ def _persist_cache() -> None:
 def _load_cache() -> None:
     """Restore the cache from disk on startup (best-effort)."""
     global _latest_workbook, _latest_result, _latest_excel, _latest_sheets
-    global _latest_intake, _latest_service_level, _latest_lead_time
+    global _latest_intake, _latest_fg_stock
+    global _latest_service_level, _latest_lead_time
+    global _latest_service_level_mode, _latest_risk_service_levels
     try:
         wb = _cache_path("workbook.bin")
         if wb.exists() and wb.stat().st_size > 0:
@@ -98,12 +111,17 @@ def _load_cache() -> None:
             params = json.loads(pa.read_text())
             _latest_service_level = params.get("service_level", 0.85)
             _latest_lead_time = params.get("lead_time", 4)
+            _latest_service_level_mode = params.get("service_level_mode", "global")
+            _latest_risk_service_levels = params.get("risk_service_levels")
         rs = _cache_path("result.pkl")
         if rs.exists() and rs.stat().st_size > 0:
             _latest_result = pd.read_pickle(rs)
         in_ = _cache_path("intake.pkl")
         if in_.exists() and in_.stat().st_size > 0:
             _latest_intake = pd.read_pickle(in_)
+        fg = _cache_path("fg_stock.pkl")
+        if fg.exists() and fg.stat().st_size > 0:
+            _latest_fg_stock = pd.read_pickle(fg)
     except Exception:
         pass
 
@@ -121,7 +139,14 @@ def _list_sheets(content: bytes) -> list[str]:
         return xl.sheet_names
 
 
-def _run(content: bytes, sheet: str, service_level: float, lead_time: int) -> pd.DataFrame:
+def _run(
+    content: bytes,
+    sheet: str,
+    service_level: float,
+    lead_time: int,
+    service_level_map: dict[str, float] | None = None,
+    fg_stock: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Write content to temp file, run pipeline, return DataFrame."""
     with NamedTemporaryFile(suffix=".xlsx") as tmp:
         tmp.write(content)
@@ -131,8 +156,61 @@ def _run(content: bytes, sheet: str, service_level: float, lead_time: int) -> pd
             intake_sheet=sheet,
             service_level=service_level,
             lead_time=lead_time,
+            service_level_map=service_level_map,
+            fg_stock=fg_stock,
         )
     return df
+
+
+async def _parse_fg_stock_upload(fg_stock_file: UploadFile) -> pd.DataFrame:
+    """Parse an uploaded FG Stock export into the normalized two-column frame.
+
+    Raises HTTPException(400) for non-Excel files, empty uploads, files missing
+    the required ``Item_Code`` / ``Open FG Stock`` columns, or files with no
+    usable SKU rows.
+    """
+    if not fg_stock_file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Only Excel files are supported for FG Stock")
+
+    content = await fg_stock_file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded FG Stock file is empty")
+
+    try:
+        with NamedTemporaryFile(suffix=".xlsx") as tmp:
+            tmp.write(content)
+            tmp.flush()
+            parsed = load_fg_stock(tmp.name)
+        if parsed.empty:
+            raise HTTPException(
+                status_code=400,
+                detail="FG Stock file contains no valid SKU rows (missing Item_Code / Open FG Stock values)",
+            )
+        return parsed
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid FG Stock file: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read FG Stock file: {exc}") from exc
+
+
+def _build_service_level_map(
+    mode: str,
+    risk_high_external: float,
+    risk_low_external: float,
+    risk_medium_external: float,
+    risk_medium_internal: float,
+) -> dict[str, float] | None:
+    """Return a Risk_Category → service level map, or None for global mode."""
+    if mode != "risk":
+        return None
+    return {
+        "High_Risk_External": risk_high_external,
+        "Low_Risk_External": risk_low_external,
+        "Medium_Risk_External": risk_medium_external,
+        "Medium_Risk_Internal": risk_medium_internal,
+    }
 
 
 def _df_to_excel_bytes(df: pd.DataFrame) -> bytes:
@@ -200,21 +278,56 @@ async def process(
     sheet_name: str = Form(...),
     service_level: float = Form(0.85),
     lead_time: int = Form(4),
+    service_level_mode: str = Form("global"),
+    risk_high_external: float = Form(DEFAULT_RISK_SERVICE_LEVELS["High_Risk_External"]),
+    risk_low_external: float = Form(DEFAULT_RISK_SERVICE_LEVELS["Low_Risk_External"]),
+    risk_medium_external: float = Form(DEFAULT_RISK_SERVICE_LEVELS["Medium_Risk_External"]),
+    risk_medium_internal: float = Form(DEFAULT_RISK_SERVICE_LEVELS["Medium_Risk_Internal"]),
+    fg_stock_file: UploadFile | None = File(default=None),
 ) -> dict[str, object]:
     """
     Run the full ABC-RFM-Risk-ROL pipeline.
 
-    Returns 43 columns per SKU including ``rol_static``, ``rol_dynamic``,
-    ``st_*`` / ``dy_*`` metric groups, and the full hierarchical
-    ABC + RFM + Risk classification.
+    ``service_level_mode`` is ``"global"`` (one level for every SKU) or
+    ``"risk"`` (per-SKU level from the SKU's Risk_Category). In risk mode the
+    four ``risk_*_external/internal`` fields supply the level for each risk
+    category; SKUs with any other Risk_Category fall back to ``service_level``.
+
+    ``fg_stock_file`` is an optional FG Stock export (``Item_Code`` +
+    ``Open FG Stock``). When provided it replaces the default FG Stock file;
+    when omitted, the previously uploaded/cached export (or the default file)
+    is used.
+
+    Returns 43+ columns per SKU including ``rol_static``, ``rol_dynamic``,
+    ``st_*`` / ``dy_*`` metric groups, the full hierarchical
+    ABC + RFM + Risk classification, and a per-SKU ``service_level`` column.
     """
     global _latest_result, _latest_excel, _latest_workbook, _latest_sheets, _latest_intake
+    global _latest_fg_stock
     global _latest_service_level, _latest_lead_time
+    global _latest_service_level_mode, _latest_risk_service_levels
 
+    if service_level_mode not in ("global", "risk"):
+        raise HTTPException(status_code=400, detail="service_level_mode must be 'global' or 'risk'")
     if not (0 < service_level <= 1):
         raise HTTPException(status_code=400, detail="service_level must be between 0 and 1")
     if lead_time < 1:
         raise HTTPException(status_code=400, detail="lead_time must be >= 1")
+
+    service_level_map = _build_service_level_map(
+        service_level_mode,
+        risk_high_external,
+        risk_low_external,
+        risk_medium_external,
+        risk_medium_internal,
+    )
+    if service_level_map:
+        for name, value in service_level_map.items():
+            if not (0 < value <= 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{name} service level must be between 0 and 1",
+                )
 
     # Resolve workbook content
     content: bytes | None = None
@@ -233,12 +346,22 @@ async def process(
                 detail="No file provided and no cached workbook found. Upload a file first.",
             )
 
+    # Resolve FG Stock export: a new upload wins, else the previously cached one
+    fg_stock: pd.DataFrame | None = None
+    if fg_stock_file is not None:
+        fg_stock = await _parse_fg_stock_upload(fg_stock_file)
+        _latest_fg_stock = fg_stock
+    else:
+        fg_stock = _latest_fg_stock
+
     try:
-        df = _run(content, sheet_name, service_level, lead_time)
+        df = _run(content, sheet_name, service_level, lead_time, service_level_map, fg_stock)
         _latest_sheets = [sheet_name]
         _latest_result = df.copy()
         _latest_excel = _df_to_excel_bytes(df)
         _latest_service_level = service_level
+        _latest_service_level_mode = service_level_mode
+        _latest_risk_service_levels = dict(service_level_map) if service_level_map else None
         _latest_lead_time = lead_time
 
         # Also compute customer analytics from the same workbook
@@ -255,6 +378,8 @@ async def process(
         return {
             "sheetName": sheet_name,
             "serviceLevel": service_level,
+            "serviceLevelMode": service_level_mode,
+            "riskServiceLevels": dict(service_level_map) if service_level_map else None,
             "leadTime": lead_time,
             "rows": int(len(df)),
             "columns": list(df.columns),
@@ -269,37 +394,69 @@ async def process(
 async def recompute_rol(
     service_level: float = Form(...),
     lead_time: int | None = Form(default=None),
+    service_level_mode: str = Form("global"),
+    risk_high_external: float = Form(DEFAULT_RISK_SERVICE_LEVELS["High_Risk_External"]),
+    risk_low_external: float = Form(DEFAULT_RISK_SERVICE_LEVELS["Low_Risk_External"]),
+    risk_medium_external: float = Form(DEFAULT_RISK_SERVICE_LEVELS["Medium_Risk_External"]),
+    risk_medium_internal: float = Form(DEFAULT_RISK_SERVICE_LEVELS["Medium_Risk_Internal"]),
 ) -> dict[str, object]:
-    """Recompute only the ROL columns with a new service level (fast path).
+    """Recompute only the ROL columns with new service level(s) (fast path).
+
+    ``service_level_mode`` is ``"global"`` (one level for every SKU) or
+    ``"risk"`` (per-SKU level from the SKU's Risk_Category). In risk mode the
+    four ``risk_*_external/internal`` fields supply the level for each risk
+    category; SKUs with any other Risk_Category fall back to ``service_level``.
 
     Uses the cached pipeline output + cached Order Intake; segmentation
-    (ABC/RFM/Risk) is untouched, so any service level can be applied in
+    (ABC/RFM/Risk) is untouched, so any service level(s) can be applied in
     seconds without re-running the full pipeline.
 
     Returns the same shape as ``/process`` (rows/columns/data + parameters).
     """
-    global _latest_result, _latest_excel, _latest_intake
+    global _latest_result, _latest_excel, _latest_intake, _latest_fg_stock
     global _latest_service_level, _latest_lead_time
+    global _latest_service_level_mode, _latest_risk_service_levels
 
     if _latest_intake is None or _latest_result is None:
         raise HTTPException(
             status_code=400,
             detail="No processed data cached. Run the pipeline from Overview first.",
         )
+    if service_level_mode not in ("global", "risk"):
+        raise HTTPException(status_code=400, detail="service_level_mode must be 'global' or 'risk'")
     if not (0 < service_level <= 1):
         raise HTTPException(status_code=400, detail="service_level must be between 0 and 1")
     if lead_time is not None and lead_time < 1:
         raise HTTPException(status_code=400, detail="lead_time must be >= 1")
 
+    service_level_map = _build_service_level_map(
+        service_level_mode,
+        risk_high_external,
+        risk_low_external,
+        risk_medium_external,
+        risk_medium_internal,
+    )
+    if service_level_map:
+        for name, value in service_level_map.items():
+            if not (0 < value <= 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{name} service level must be between 0 and 1",
+                )
+
     try:
         weekly = _build_weekly_from_intake(_latest_intake)
 
-        # Per-SKU lead time, mirroring the pipeline's lead_time_map logic
+        # Per-SKU lead time, mirroring the pipeline's lead_time_map logic.
+        # The intake "Lead Time" column is in DAYS — convert to weeks (÷7) so
+        # the safety-stock formula uses weeks; SKUs with no value fall back to
+        # the global weeks default.
         lead_time_map: dict[str, float] = {}
         if "Lead Time" in _latest_intake.columns:
             lead_time_map = (
                 _latest_intake.groupby("Item_Code")["Lead Time"]
                 .agg(lambda x: float(x.mode().iloc[0]) if not x.mode().empty else float(x.median()))
+                .div(DAYS_PER_WEEK)  # days -> weeks
                 .fillna(float(_latest_lead_time))
                 .to_dict()
             )
@@ -310,14 +467,17 @@ async def recompute_rol(
             service_level=service_level,
             lead_time=_latest_lead_time if lead_time is None else lead_time,
             lead_time_map=lead_time_map if lead_time_map else None,
+            service_level_map=service_level_map,
         )
 
-        # ROL-driven FG Stock columns must track the new service level
-        df = enrich_with_fg_stock(df)
+        # ROL-driven FG Stock columns must track the new service level(s)
+        df = enrich_with_fg_stock(df, fg_stock=_latest_fg_stock)
 
         _latest_result = df.copy()
         _latest_excel = _df_to_excel_bytes(df)
         _latest_service_level = service_level
+        _latest_service_level_mode = service_level_mode
+        _latest_risk_service_levels = dict(service_level_map) if service_level_map else None
         _latest_lead_time = _latest_lead_time if lead_time is None else lead_time
         _persist_cache()
 
@@ -326,6 +486,8 @@ async def recompute_rol(
             "columns": list(df.columns),
             "data": df.to_dict(orient="records"),
             "serviceLevel": service_level,
+            "serviceLevelMode": service_level_mode,
+            "riskServiceLevels": dict(service_level_map) if service_level_map else None,
             "leadTime": _latest_lead_time,
         }
     except HTTPException:
@@ -382,6 +544,7 @@ def product_rol_steps(item_code: str) -> dict[str, object]:
     final ROL agree with the numbers shown in the explorer table.
     """
     global _latest_intake, _latest_service_level, _latest_lead_time
+    global _latest_service_level_mode, _latest_risk_service_levels, _latest_result
 
     if _latest_intake is None:
         raise HTTPException(
@@ -392,16 +555,27 @@ def product_rol_steps(item_code: str) -> dict[str, object]:
     try:
         weekly = _build_weekly_from_intake(_latest_intake)
         # Per-SKU lead time, mirroring the pipeline exactly (truncated to int
-        # inside add_rol_columns so the trace always equals the table values)
+        # inside add_rol_columns so the trace always equals the table values).
+        # The intake "Lead Time" column is in DAYS — convert to weeks (÷7).
         lead_time = int(_latest_lead_time)
         if "Lead Time" in _latest_intake.columns:
             lt_rows = _latest_intake.loc[_latest_intake["Item_Code"] == item_code, "Lead Time"]
             if not lt_rows.mode().empty:
-                lead_time = int(lt_rows.mode().iloc[0])
+                lead_time = int(lt_rows.mode().iloc[0] / DAYS_PER_WEEK)
+
+        # Per-SKU service level: in risk mode, resolve from the item's own
+        # Risk_Category so the trace always matches the pipeline output.
+        service_level = _latest_service_level
+        if _latest_risk_service_levels and _latest_result is not None:
+            item_row = _latest_result[_latest_result["Item_Code"].astype(str) == str(item_code)]
+            if not item_row.empty and "Risk_Category" in item_row.columns:
+                risk_cat = str(item_row.iloc[0]["Risk_Category"])
+                service_level = _latest_risk_service_levels.get(risk_cat, service_level)
+
         steps = compute_rol_steps_for_item(
             weekly,
             item_code,
-            service_level=_latest_service_level,
+            service_level=service_level,
             lead_time=lead_time,
         )
         if steps is None:
@@ -431,12 +605,13 @@ def product_rol_sensitivity(item_code: str) -> dict[str, object]:
 
     try:
         weekly = _build_weekly_from_intake(_latest_intake)
-        # Per-SKU lead time, mirroring the pipeline (truncated to int)
+        # Per-SKU lead time, mirroring the pipeline (truncated to int).
+        # The intake "Lead Time" column is in DAYS — convert to weeks (÷7).
         lead_time = int(_latest_lead_time)
         if "Lead Time" in _latest_intake.columns:
             lt_rows = _latest_intake.loc[_latest_intake["Item_Code"] == item_code, "Lead Time"]
             if not lt_rows.mode().empty:
-                lead_time = int(lt_rows.mode().iloc[0])
+                lead_time = int(lt_rows.mode().iloc[0] / DAYS_PER_WEEK)
         points = compute_rol_sensitivity(weekly, item_code, lead_time=lead_time)
         if points is None:
             raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
@@ -448,8 +623,28 @@ def product_rol_sensitivity(item_code: str) -> dict[str, object]:
 
 
 @app.get("/download")
-def download() -> StreamingResponse:
-    """Download the latest pipeline result as an Excel file."""
+def download(format: str = "xlsx") -> StreamingResponse:
+    """Download the latest pipeline result as Excel (default) or CSV.
+
+    ``format`` is ``"xlsx"`` (default, same format as pipeline output) or
+    ``"csv"``. Both are streamed from the **authoritative in-memory result**
+    (``_latest_result`` / ``_latest_excel``), so the export always reflects the
+    latest run/recompute — never a stale frontend cache.
+    """
+    if format not in ("xlsx", "csv"):
+        raise HTTPException(status_code=400, detail="format must be 'xlsx' or 'csv'")
+    if _latest_result is None:
+        raise HTTPException(status_code=404, detail="No generated file found. Call /process first")
+
+    if format == "csv":
+        # UTF-8 BOM so Excel renders ₹ (and other non-ASCII) values correctly
+        csv_bytes = ("\ufeff" + _latest_result.to_csv(index=False)).encode("utf-8")
+        return StreamingResponse(
+            BytesIO(csv_bytes),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=inventory_pipeline_output.csv"},
+        )
+
     if _latest_excel is None:
         raise HTTPException(status_code=404, detail="No generated file found. Call /process first")
 

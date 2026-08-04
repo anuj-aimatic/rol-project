@@ -57,6 +57,7 @@ const KEY_COLUMNS = [
   'Item_Category_Code',
   'Product Group Code',
   'Product_SubGroup_Code',
+  'Customer Type',
   'Recency',
   'Frequency',
   'Monetary',
@@ -102,6 +103,7 @@ const COL_LABELS: Record<string, string> = {
   Item_Category_Code: 'Category',
   'Product Group Code': 'Group',
   Product_SubGroup_Code: 'Subgroup',
+  'Customer Type': 'Customer Type',
   Recency: 'Recency',
   Frequency: 'Frequency',
   Monetary: 'Monetary',
@@ -339,10 +341,15 @@ export function InventoryExplorerPage() {
     return ['service_level', ...KEY_COLUMNS.filter((c) => result.columns.includes(c))]
   }, [result])
 
-  // Cell value for a column (handles the pseudo service_level column)
+  // Cell value for a column (handles the pseudo service_level column).
+  // Prefers the per-SKU service_level emitted by the pipeline (risk-based mode
+  // gives each SKU its own level) and falls back to the stored global for
+  // results produced before that column existed.
   const cellValue = useCallback(
     (row: Record<string, unknown>, col: string): unknown =>
-      col === 'service_level' ? result?.serviceLevel : row[col],
+      col === 'service_level'
+        ? (row.service_level as number | undefined) ?? result?.serviceLevel
+        : row[col],
     [result],
   )
 
@@ -505,7 +512,11 @@ export function InventoryExplorerPage() {
     <div>
       <PageHeader
         title="Inventory Explorer"
-        subtitle={`${result.rows.toLocaleString()} products · ${columns.length} metrics · Service level ${fmtPct(result.serviceLevel)}`}
+        subtitle={`${result.rows.toLocaleString()} products · ${columns.length} metrics · ${
+          (result.serviceLevelMode ?? 'global') === 'risk'
+            ? 'Risk-based service levels'
+            : `Service level ${fmtPct(result.serviceLevel)}`
+        }`}
       />
 
       <ContentCard

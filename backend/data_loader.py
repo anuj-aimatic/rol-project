@@ -65,8 +65,9 @@ def load_fg_stock(
 def load_order_intake(
     file_path: str | Path,
     sheet_name: str = "M1",
+    dedupe_orders: bool = True,
 ) -> pd.DataFrame:
-    """Load an Order Intake Excel sheet with date parsing.
+    """Load an Order Intake Excel sheet with date parsing + order-line dedup.
 
     Parameters
     ----------
@@ -74,6 +75,14 @@ def load_order_intake(
         Path to the Excel file.
     sheet_name : str
         Sheet name to read (default ``"M1"``; also ``"M2&H2"``).
+    dedupe_orders : bool
+        Collapse repeated order lines. Rows that share the same customer
+        (``Party_Code``), order number (``OA_No``), order date
+        (``OriginalOA_Date``) and SKU (``Item_Code``) represent **one** order,
+        not several — e.g. a single OA_No exported once per SKU line is
+        duplicated 10x in the raw export. Keeping only the first occurrence
+        prevents inflated Frequency, weekly demand (and therefore ROL), and
+        Monetary values. Default ``True``.
 
     Handles both Excel serial numbers and ISO date strings in
     ``OriginalOA_Date``.
@@ -86,4 +95,17 @@ def load_order_intake(
         return pd.to_datetime(val)
 
     df["OriginalOA_Date"] = df["OriginalOA_Date"].apply(_parse_date)
+
+    if dedupe_orders:
+        n_before = len(df)
+        df = df.drop_duplicates(
+            subset=["Party_Code", "OA_No", "OriginalOA_Date", "Item_Code"],
+            keep="first",
+        ).reset_index(drop=True)
+        if n_before != len(df):
+            print(
+                f"       Order-line dedup: {n_before} -> {len(df)} rows "
+                "(same customer + OA_No + date + SKU counts as one order)"
+            )
+
     return df

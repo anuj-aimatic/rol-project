@@ -51,22 +51,30 @@ def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
         return pd.Series(np.divide(num, den), index=num.index)
 
 
-def enrich_with_fg_stock(df: pd.DataFrame) -> pd.DataFrame:
+def enrich_with_fg_stock(
+    df: pd.DataFrame,
+    fg_stock: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Load the FG Stock file (best-effort) and add the valuation columns.
 
-    Convenience wrapper for pipeline / API callers: when the FG Stock file
-    is missing (e.g. an environment without the local ``data/`` folder),
-    every SKU falls back to ``Open FG Stock = 0`` instead of failing.
+    ``fg_stock`` may be a preloaded frame — e.g. an uploaded export parsed by
+    :func:`backend.data_loader.load_fg_stock` — which takes precedence over the
+    default file. When ``None`` and the default FG Stock file is missing (e.g.
+    an environment without the local ``data/`` folder), every SKU falls back
+    to ``Open FG Stock = 0`` instead of failing.
     """
-    try:
-        fg_stock = load_fg_stock()
-        print(f"       FG Stock: {len(fg_stock)} SKUs mapped")
-    except FileNotFoundError:
-        print(
-            "       FG Stock file not found — Open FG Stock = 0 for all SKUs "
-            "(all valuation/deficit columns are computed from zero)"
-        )
-        fg_stock = None
+    if fg_stock is None:
+        try:
+            fg_stock = load_fg_stock()
+            print(f"       FG Stock: {len(fg_stock)} SKUs mapped")
+        except FileNotFoundError:
+            print(
+                "       FG Stock file not found — Open FG Stock = 0 for all SKUs "
+                "(all valuation/deficit columns are computed from zero)"
+            )
+            fg_stock = None
+    else:
+        print(f"       FG Stock: {len(fg_stock)} SKUs mapped (uploaded export)")
     return add_fg_stock_columns(df, fg_stock)
 
 
@@ -92,12 +100,15 @@ def add_fg_stock_columns(
 
     Notes
     -----
-    * ``Open FG Stock`` defaults to 0 for SKUs with no match in the FG file.
+    * ``Open FG Stock`` defaults to 0 for SKUs with no match in the FG file,
+      and **negative values are clamped to 0** (a negative open stock is
+      treated as no stock on hand — per the requested rule).
     * ``Unit Cost at 65 percent`` and ``Stock Cost`` are single columns — the
       static/dynamic variants were identical (same total sales), so only one
       is kept.
-    * ``Stock Cost`` is zeroed when ``Open FG Stock < 0`` (per the requested
-      IF rule); deficit costs are absolute values.
+    * ``Stock Cost`` is zeroed when ``Open FG Stock < 0`` (defensive — the
+      clamp above already guarantees non-negative stock); deficit costs are
+      absolute values.
     * ``Inventory Turnover Month`` is ``rol / avg_monthly_demand`` — how many
       months of forward demand the ROL covers. Undefined when monthly demand
       is 0, which becomes ``NaN`` for explicit display.
@@ -113,7 +124,8 @@ def add_fg_stock_columns(
         fg["Item_Code"] = fg["Item_Code"].astype(str).str.strip()
         key = out["Item_Code"].astype(str).str.strip()
         stock = key.map(fg.set_index("Item_Code")["Open FG Stock"]).fillna(0.0)
-        out["Open FG Stock"] = stock
+        # Negative open stock is treated as 0 (no stock on hand)
+        out["Open FG Stock"] = stock.clip(lower=0.0)
     else:
         out["Open FG Stock"] = 0.0
 
