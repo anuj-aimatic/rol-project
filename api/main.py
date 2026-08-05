@@ -17,7 +17,8 @@ from tempfile import NamedTemporaryFile
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.customer_analytics import run_customer_analytics
 from backend.config import DAYS_PER_WEEK, DEFAULT_RISK_SERVICE_LEVELS
@@ -653,3 +654,35 @@ def download(format: str = "xlsx") -> StreamingResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=inventory_pipeline_output.xlsx"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Static frontend (production)
+# ---------------------------------------------------------------------------
+# When a built Vite app exists at ../frontend/dist (i.e. `npm run build` was
+# run), serve it from the same FastAPI app. This lets Azure App Service host
+# the API and the React dashboard behind a single HTTPS URL — no CORS, one
+# link to share with the client. Skipped entirely during local development so
+# the API-only dev workflow is unchanged.
+#
+# NOTE: this catch-all must stay at the END of the file — every API route
+# above is registered first so FastAPI matches them before this fallback.
+
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if (_FRONTEND_DIST / "index.html").exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_DIST / "assets"),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str) -> FileResponse:
+        """Serve the SPA with client-side routing fallback to index.html."""
+        candidate = _FRONTEND_DIST / full_path
+        # Serve real files (e.g. favicon) directly; otherwise let React Router
+        # handle the path (deep links / refresh must return index.html).
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")
