@@ -1,6 +1,6 @@
 import { Activity, Info, Loader2, Upload } from 'lucide-react'
 import axios from 'axios'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { ContentCard } from '@/components/common/content-card'
@@ -61,8 +61,223 @@ const RISK_CATEGORY_TONES: Record<string, string> = {
   Low_Risk_Internal: 'bg-teal-500',
 }
 
+/** ROL basis used by the Refurbishment Budget card. */
+type RolMode = 'static' | 'dynamic'
+
+/** Pipeline columns used per ROL basis. */
+const REFURB_COLUMNS: Record<
+  RolMode,
+  { rol: string; safetyStock: string; totalSales: string }
+> = {
+  static: { rol: 'rol_static', safetyStock: 'st_safety_stock', totalSales: 'st_total_sales' },
+  dynamic: { rol: 'rol_dynamic', safetyStock: 'dy_safety_stock', totalSales: 'dy_total_sales' },
+}
+
+const ROL_MODE_LABELS: Record<RolMode, string> = {
+  static: 'Static',
+  dynamic: 'Dynamic',
+}
+
 /** Format a monetary amount in Indian Rupees with thousands separators. */
 const inr = (v: number) => '₹' + Math.round(v).toLocaleString('en-IN')
+
+/** Display scale for monetary values on the Refurbishment Budget card. */
+type MoneyFormat = 'full' | 'lakhs' | 'crores'
+
+const MONEY_FORMAT_OPTIONS: { key: MoneyFormat; label: string; title: string }[] = [
+  { key: 'full', label: '₹ Full', title: 'Exact amount in Indian Rupees' },
+  { key: 'lakhs', label: '₹ Lakhs', title: 'Amount in lakhs (1 L = ₹1,00,000)' },
+  { key: 'crores', label: '₹ Crores', title: 'Amount in crores (1 Cr = ₹1,00,00,000)' },
+]
+
+/** Format a monetary amount at the selected display scale. */
+function formatMoney(v: number, fmt: MoneyFormat): string {
+  switch (fmt) {
+    case 'lakhs': {
+      const lakhs = v / 1e5
+      // Too small to represent in lakhs — fall back to the exact figure
+      if (v > 0 && lakhs < 0.005) return inr(v)
+      return `₹${lakhs.toLocaleString('en-IN', { maximumFractionDigits: 2 })} L`
+    }
+    case 'crores': {
+      const crores = v / 1e7
+      // Too small to represent in crores — fall back to the exact figure
+      if (v > 0 && crores < 0.005) return inr(v)
+      return `₹${crores.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr`
+    }
+    default:
+      return inr(v)
+  }
+}
+
+/* ---- Refurbishment Budget ⓘ explanation popover ---- */
+
+function RefurbishmentInfoPopover({ mode }: { mode: RolMode }) {
+  const [hovered, setHovered] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const open = hovered || pinned
+  const rootRef = useRef<HTMLSpanElement>(null)
+  const panelId = useId()
+
+  // While pinned (clicked), close on outside click or Escape.
+  useEffect(() => {
+    if (!pinned) return
+    const onPointerDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setPinned(false)
+      }
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPinned(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [pinned])
+
+  return (
+    <span
+      ref={rootRef}
+      className="relative inline-flex"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        aria-label="How is the Refurbishment Budget calculated?"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls={panelId}
+        onClick={() => setPinned((p) => !p)}
+        className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition-colors ${
+          open
+            ? 'bg-primary/10 text-primary'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+        }`}
+      >
+        <Info size={13} />
+      </button>
+
+      {open && (
+        <div
+          id={panelId}
+          role="dialog"
+          aria-label="How is the Refurbishment Budget calculated?"
+          className="absolute left-0 top-full z-50 mt-2 w-[28rem] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card p-4 shadow-xl"
+        >
+          <p className="text-sm font-semibold text-foreground">
+            How is the Refurbishment Budget calculated?
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            The Refurbishment Budget estimates the working capital required to
+            replenish understocked SKUs back to their recommended Reorder Level (ROL).
+          </p>
+
+          <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Calculation Logic
+          </p>
+
+          <div className="mt-2 space-y-2.5">
+            <div>
+              <p className="text-xs font-medium text-foreground">
+                Step 1 — Check whether replenishment is required
+              </p>
+              <div className="mt-1 space-y-0.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                <p>If Open FG Stock &lt;= Safety Stock ({ROL_MODE_LABELS[mode]})</p>
+                <p>Refurbishment Qty = ROL ({ROL_MODE_LABELS[mode]}) − Open FG Stock</p>
+                <p>Otherwise Refurbishment Qty = 0</p>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-foreground">
+                Step 2 — Calculate Unit Cost
+              </p>
+              <p className="mt-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                Unit Cost = (Monetary ÷ Total Sales) × 0.65
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                where <span className="font-mono">Monetary</span> = total sales
+                value, <span className="font-mono">Total Sales</span> = total units
+                sold, and 65% represents the assumed inventory carrying value.
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-foreground">
+                Step 3 — Calculate Refurbishment Budget
+              </p>
+              <p className="mt-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                Refurbishment Budget = Refurbishment Qty × Unit Cost
+              </p>
+            </div>
+          </div>
+
+          {/* Worked example */}
+          <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+              Example
+            </p>
+            <div className="mt-1.5 space-y-0.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <p>Open FG Stock = 230 units</p>
+              <p>Safety Stock = 232 units</p>
+              <p>ROL = 576 units</p>
+              <p>Unit Cost = ₹100</p>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              Since <span className="font-mono">230 &lt;= 232</span> the SKU
+              requires replenishment.
+            </p>
+            <p className="mt-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              Refurbishment Qty = 576 − 230 = 346 units
+            </p>
+            <p className="mt-1 font-mono text-[11px] leading-relaxed text-foreground">
+              Refurbishment Budget = 346 × ₹100 = ₹34,600
+            </p>
+          </div>
+
+          <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Executive Summary
+          </p>
+          <p className="mt-3 rounded-lg border border-border bg-background/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            Use the <strong className="text-foreground">ROL basis</strong> dropdown
+            at the top of this card to switch between{' '}
+            <span className="font-mono">{ROL_MODE_LABELS.static}</span> and{' '}
+            <span className="font-mono">{ROL_MODE_LABELS.dynamic}</span> ROL
+            calculations — everything below recomputes instantly.
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            The dashboard aggregates the Refurbishment Budget for every SKU by Risk
+            Category:
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {RISK_CATEGORY_ORDER.map((key) => (
+              <li
+                key={key}
+                className="flex items-center gap-1.5 text-xs text-foreground"
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${RISK_CATEGORY_TONES[key]}`}
+                />
+                {RISK_CATEGORY_LABELS[key]}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            The{' '}
+            <span className="font-medium text-foreground">
+              Total Working Capital Required
+            </span>{' '}
+            is the sum of all risk-category budgets.
+          </p>
+        </div>
+      )}
+    </span>
+  )
+}
 
 interface LocalState {
   selectedSheet: string
@@ -117,6 +332,8 @@ export function OverviewPage() {
   const [loadingSheets, setLoadingSheets] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [recomputing, setRecomputing] = useState(false)
+  const [rolMode, setRolMode] = useState<RolMode>('static')
+  const [moneyFormat, setMoneyFormat] = useState<MoneyFormat>('full')
 
   useEffect(() => {
     const state: LocalState = { selectedSheet, serviceLevel, serviceLevelMode, riskLevels }
@@ -165,11 +382,13 @@ export function OverviewPage() {
   }, [result])
 
   /* Refurbishment Budget — working capital needed to replenish SKUs back to
-   * Static ROL. Derived purely from existing pipeline outputs; this never
-   * modifies the ROL, Safety Stock, or Inventory Explorer calculations. */
+   * their recommended ROL (Static or Dynamic, per rolMode). Derived purely
+   * from existing pipeline outputs; this never modifies the ROL, Safety Stock,
+   * or Inventory Explorer calculations. */
   const refurbishment = useMemo(() => {
     if (!result || result.data.length === 0) return null
 
+    const cols = REFURB_COLUMNS[rolMode]
     const perCat = new Map<string, { skus: number; qty: number; budget: number }>()
     let totalSkus = 0
     let totalQty = 0
@@ -177,15 +396,15 @@ export function OverviewPage() {
 
     for (const row of result.data) {
       const open = toNumeric(row['Open FG Stock'])
-      const rol = toNumeric(row['rol_static'])
-      const ss = toNumeric(row['st_safety_stock'])
-      // Refurbishment Qty = ROL (Static) − Open FG Stock when open stock is at
-      // or below Static Safety Stock; otherwise 0 (never negative).
+      const rol = toNumeric(row[cols.rol])
+      const ss = toNumeric(row[cols.safetyStock])
+      // Refurbishment Qty = ROL − Open FG Stock when open stock is at or below
+      // the Safety Stock of the selected ROL basis; otherwise 0 (never negative).
       const qty = open <= ss ? Math.max(0, rol - open) : 0
       if (qty <= 0) continue
 
-      // Unit Cost (Static) = (Monetary ÷ Static total sales) × 65%
-      const sales = toNumeric(row['st_total_sales'])
+      // Unit Cost = (Monetary ÷ total sales for the selected basis) × 65%
+      const sales = toNumeric(row[cols.totalSales])
       const unitCost = sales > 0 ? (toNumeric(row['Monetary']) / sales) * 0.65 : 0
       const budget = qty * unitCost
 
@@ -232,8 +451,11 @@ export function OverviewPage() {
       }
     }
 
+    // Sort by SKU count, highest first (budget breaks any remaining tie).
+    rows.sort((a, b) => b.skus - a.skus || b.budget - a.budget)
+
     return { rows, totalSkus, totalQty, totalBudget }
-  }, [result])
+  }, [result, rolMode])
 
   const processSteps = useMemo(() => {
     const done = processing || !!result
@@ -848,21 +1070,90 @@ export function OverviewPage() {
             </div>
           </ContentCard>
 
-          {/* Refurbishment Budget */}
+          {/* Refurbishment Budget — rendered above Executive Summary */}
           {refurbishment && (
             <ContentCard
-              title="Refurbishment Budget"
-              description="Working capital required to replenish understocked SKUs back to their Static ROL."
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  Refurbishment Budget
+                  <RefurbishmentInfoPopover mode={rolMode} />
+                </span>
+              }
+              description={`Working capital required to replenish understocked SKUs back to their ${ROL_MODE_LABELS[rolMode]} ROL.`}
               icon={<Activity size={18} className="text-primary" />}
-              className="xl:col-span-3"
+              className="order-first xl:col-span-3"
             >
+              {/* ROL basis selector */}
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Calculating against the{' '}
+                  <span className="font-medium text-foreground">
+                    {ROL_MODE_LABELS[rolMode]}
+                  </span>{' '}
+                  ROL.
+                </p>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="refurb-rol-mode"
+                      className="text-[11px] uppercase tracking-wide text-muted-foreground"
+                    >
+                      ROL basis
+                    </label>
+                    <select
+                      id="refurb-rol-mode"
+                      value={rolMode}
+                      onChange={(e) => setRolMode(e.target.value as RolMode)}
+                      className="h-8 cursor-pointer rounded-lg border border-border bg-background px-2 text-xs font-medium text-foreground outline-none focus:border-ring"
+                    >
+                      <option value="static">Static ROL</option>
+                      <option value="dynamic">Dynamic ROL</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span
+                      id="refurb-money-format-label"
+                      className="text-[11px] uppercase tracking-wide text-muted-foreground"
+                    >
+                      Amount
+                    </span>
+                    <div
+                      role="group"
+                      aria-labelledby="refurb-money-format-label"
+                      className="flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5"
+                    >
+                      {MONEY_FORMAT_OPTIONS.map((opt) => {
+                        const active = moneyFormat === opt.key
+                        return (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            title={opt.title}
+                            aria-pressed={active}
+                            onClick={() => setMoneyFormat(opt.key)}
+                            className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                              active
+                                ? 'bg-primary text-primary-foreground'
+                                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl border border-border bg-background/70 p-3">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">
                     Total Working Capital Required
                   </p>
                   <div className="mt-1 text-lg font-semibold text-foreground">
-                    {inr(refurbishment.totalBudget)}
+                    {formatMoney(refurbishment.totalBudget, moneyFormat)}
                   </div>
                 </div>
                 <div className="rounded-xl border border-border bg-background/70 p-3">
@@ -912,7 +1203,9 @@ export function OverviewPage() {
                         <td className="py-2 pr-4 text-right text-muted-foreground">
                           {r.qty.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
-                        <td className="py-2 text-right font-medium">{inr(r.budget)}</td>
+                        <td className="py-2 text-right font-medium">
+                          {formatMoney(r.budget, moneyFormat)}
+                        </td>
                       </tr>
                     ))}
                     <tr className="border-t-2 border-border bg-background/60">
@@ -926,7 +1219,7 @@ export function OverviewPage() {
                         {refurbishment.totalQty.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                       </td>
                       <td className="py-2.5 text-right font-semibold text-primary">
-                        {inr(refurbishment.totalBudget)}
+                        {formatMoney(refurbishment.totalBudget, moneyFormat)}
                       </td>
                     </tr>
                   </tbody>
@@ -934,11 +1227,11 @@ export function OverviewPage() {
               </div>
 
               <p className="mt-4 rounded-lg border border-border bg-background/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                Refurbishment Qty = Static ROL − Open FG Stock when Open FG Stock ≤ Static
-                Safety Stock (else 0) · Unit Cost (Static) = (Monetary ÷ Static total sales) ×
-                65% · Budget = Refurbishment Qty × Unit Cost (Static). Derived from pipeline
-                outputs — existing ROL / Safety Stock / Inventory Explorer calculations are
-                unchanged.
+                Refurbishment Qty = {ROL_MODE_LABELS[rolMode]} ROL − Open FG Stock when Open
+                FG Stock ≤ {ROL_MODE_LABELS[rolMode]} Safety Stock (else 0) · Unit Cost ={' '}
+                (Monetary ÷ {ROL_MODE_LABELS[rolMode]} total sales) × 65% · Budget =
+                Refurbishment Qty × Unit Cost. Derived from pipeline outputs — existing ROL /
+                Safety Stock / Inventory Explorer calculations are unchanged.
               </p>
             </ContentCard>
           )}

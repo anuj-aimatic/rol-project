@@ -3,7 +3,7 @@ import type { PropsWithChildren, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 interface ContentCardProps extends PropsWithChildren {
-  title: string
+  title: ReactNode
   description?: string
   icon?: ReactNode
   className?: string
