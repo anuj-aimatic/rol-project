@@ -97,15 +97,27 @@ def load_order_intake(
     df["OriginalOA_Date"] = df["OriginalOA_Date"].apply(_parse_date)
 
     if dedupe_orders:
-        n_before = len(df)
-        df = df.drop_duplicates(
-            subset=["Party_Code", "OA_No", "OriginalOA_Date", "Item_Code"],
-            keep="first",
-        ).reset_index(drop=True)
-        if n_before != len(df):
-            print(
-                f"       Order-line dedup: {n_before} -> {len(df)} rows "
-                "(same customer + OA_No + date + SKU counts as one order)"
+        df = (
+            df.groupby(
+                [
+                    "Party_Code",
+                    "OA_No",
+                    "OriginalOA_Date",
+                    "Item_Code",
+                    "Type",
+                    "Item_Category_Code",
+                    "Product Group Code",
+                    "Product_SubGroup_Code",
+                    "Lead Time",
+                    "Lead Time for Stocking",
+                    "Item_Name",
+                ],
+                as_index=False,
             )
+            .agg(
+                Order_Qty=("Order_Qty", "sum"),
+                Order_Amount=("Order_Amount", "sum"),
+            )
+        )
 
     return df

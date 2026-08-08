@@ -1,0 +1,37 @@
+INFO:     Will watch for changes in these directories: ['/Users/apple/AI Matics/Fibro/ROL Project']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [36946] using StatReload
+INFO:     Started server process [36994]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:54170 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54170 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "POST /sheets HTTP/1.1" 200 OK
+[1/6] Loading Order Intake data (sheet: M1)...
+       14636 rows, 13 columns
+[2/6] Computing product group risk...
+       38 product groups classified
+[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
+       3167 SKUs classified (ABC)
+[4/6] Running SKU-level RFM...
+       3167 SKUs classified (RFM)
+[5/6] Merging ABC + RFM + Risk at SKU level...
+       Computing mode_order_qty per SKU...
+       Computing Customer Type per SKU...
+       Combined: 3167 SKU rows
+[6/7] Computing ROL (static & dynamic) from intake data...
+       Weekly demand records: 11443
+       Per-SKU lead times extracted for 3167 items
+       Done! 3167 rows, 46 columns
+[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
+       FG Stock: 3902 SKUs mapped
+       Final: 3167 rows, 55 columns
+INFO:     127.0.0.1:54179 - "POST /process HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54201 - "GET /product/2016.204.00.065.015.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54202 - "GET /product/2016.204.00.065.015.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54201 - "GET /product/2016.204.00.065.015.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54202 - "GET /product/2016.204.00.065.015.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54202 - "GET /product/2016.204.00.065.015.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54203 - "GET /product/2016.204.00.065.015.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54202 - "GET /product/2016.204.00.065.015.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54203 - "GET /product/2016.204.00.065.015.1/rol-steps HTTP/1.1" 200 OK

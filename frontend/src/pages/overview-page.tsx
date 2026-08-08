@@ -485,7 +485,6 @@ export function OverviewPage() {
       const form = new FormData()
       form.append('file', nextFile)
       const res = await apiClient.post<string[] | { sheets: string[] }>('/sheets', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 180_000,
       })
       const fetched = Array.isArray(res.data) ? res.data : (res.data as Record<string, string[]>).sheets ?? []
@@ -537,7 +536,6 @@ export function OverviewPage() {
       form.append('risk_medium_internal', String(riskLevels.Medium_Risk_Internal / 100))
 
       const res = await apiClient.post<PipelineResult>('/process', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 300_000,
       })
 

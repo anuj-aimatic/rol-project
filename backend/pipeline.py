@@ -26,8 +26,8 @@ from backend.rol_calculator import add_rol_columns
 def _build_weekly_from_intake(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate weekly demand (sum of Order_Qty) per SKU from order intake data."""
     dd = df.copy()
-    dd["Year"] = dd["OriginalOA_Date"].dt.isocalendar().year.astype(int)
-    dd["Week"] = dd["OriginalOA_Date"].dt.isocalendar().week.astype(int)
+    dd["Year"] = dd["OriginalOA_Date"].dt.year.astype(int)
+    dd["Week"] = dd["OriginalOA_Date"].dt.strftime("%U").astype(int) + 1
     weekly = (
         dd.groupby(["Item_Code", "Year", "Week"], as_index=False)["Order_Qty"]
         .sum()
