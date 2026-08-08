@@ -42,3 +42,9 @@ backend/debug_*.py
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+
+
+
+# *.xlsx
+# ~$*
+!data/*.xlsx
