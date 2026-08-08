@@ -74,3 +74,35 @@ body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
 }
+
+@keyframes bg-stripes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 200% 200%;
+  }
+}
+
+.login-background-animation {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.25) 10%,
+    rgba(59, 130, 246, 0.05) 10%,
+    rgba(59, 130, 246, 0.05) 30%,
+    rgba(168, 85, 247, 0.18) 30%,
+    rgba(168, 85, 247, 0.18) 40%,
+    rgba(59, 130, 246, 0.25) 40%,
+    rgba(59, 130, 246, 0.05) 40%,
+    rgba(59, 130, 246, 0.05) 60%,
+    rgba(168, 85, 247, 0.18) 60%,
+    rgba(168, 85, 247, 0.18) 70%,
+    rgba(59, 130, 246, 0.25) 70%
+  );
+  background-size: 200% 200%;
+  animation: bg-stripes 10s linear infinite;
+  opacity: 0.8;
+  pointer-events: none;
+}
