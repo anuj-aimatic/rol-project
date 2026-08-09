@@ -627,6 +627,7 @@ export function OverviewPage() {
     setRecomputing(true)
     try {
       const form = new FormData()
+      form.append('sheet_name', selectedSheet)
       form.append('service_level', String(serviceLevel))
       form.append('service_level_mode', serviceLevelMode)
       form.append('risk_high_external', String(riskLevels.High_Risk_External / 100))

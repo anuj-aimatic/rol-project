@@ -503,6 +503,7 @@ async def process(
 
 @app.post("/recompute-rol")
 async def recompute_rol(
+    sheet_name: str | None = Form(default=None),
     service_level: float = Form(...),
     lead_time: int | None = Form(default=None),
     service_level_mode: str = Form("global"),
@@ -533,6 +534,14 @@ async def recompute_rol(
             status_code=400,
             detail="No processed data cached. Run the pipeline from Overview first.",
         )
+    if sheet_name is not None:
+        if sheet_name not in _latest_results or sheet_name not in _latest_intakes:
+            raise HTTPException(
+                status_code=400,
+                detail="No cached result available for the selected sheet. Run the pipeline for that sheet first.",
+            )
+        _latest_result = _latest_results[sheet_name].copy()
+        _latest_intake = _latest_intakes[sheet_name].copy()
     if service_level_mode not in ("global", "risk"):
         raise HTTPException(status_code=400, detail="service_level_mode must be 'global' or 'risk'")
     if not (0 < service_level <= 1):
