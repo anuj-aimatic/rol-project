@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import urllib.parse
 from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -39,6 +40,9 @@ app.add_middleware(
 
 # ---- In-memory cache (single-session) ----
 _latest_result: pd.DataFrame | None = None
+_latest_results: dict[str, pd.DataFrame] = {}
+_latest_customer_analytics: dict[str, dict] = {}
+_latest_intakes: dict[str, pd.DataFrame] = {}
 _latest_excel: bytes | None = None
 _latest_workbook: bytes | None = None
 _latest_sheets: list[str] | None = None
@@ -56,6 +60,14 @@ CACHE_DIR = Path(os.environ.get("ROL_CACHE_DIR", os.path.join(tempfile.gettempdi
 def _cache_path(name: str) -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return CACHE_DIR / name
+
+
+def _sheet_cache_filename(sheet_name: str) -> str:
+    return f"result_{urllib.parse.quote_plus(sheet_name)}.pkl"
+
+
+def _customer_analytics_cache_filename(sheet_name: str) -> str:
+    return f"customer_analytics_{urllib.parse.quote_plus(sheet_name)}.json"
 
 
 def _persist_cache() -> None:
@@ -80,6 +92,16 @@ def _persist_cache() -> None:
                 },
                 f,
             )
+        if _latest_results:
+            for sheet_name, df in _latest_results.items():
+                df.to_pickle(_cache_path(_sheet_cache_filename(sheet_name)))
+        if _latest_intakes:
+            for sheet_name, intake in _latest_intakes.items():
+                intake.to_pickle(_cache_path(f"intake_{urllib.parse.quote_plus(sheet_name)}.pkl"))
+        if _latest_customer_analytics:
+            for sheet_name, analytics in _latest_customer_analytics.items():
+                with open(_cache_path(_customer_analytics_cache_filename(sheet_name)), "w", encoding="utf-8") as f:
+                    json.dump(analytics, f)
         if _latest_result is not None:
             _latest_result.to_pickle(_cache_path("result.pkl"))
         if _latest_intake is not None:
@@ -93,7 +115,7 @@ def _persist_cache() -> None:
 
 def _load_cache() -> None:
     """Restore the cache from disk on startup (best-effort)."""
-    global _latest_workbook, _latest_result, _latest_excel, _latest_sheets
+    global _latest_workbook, _latest_result, _latest_results, _latest_customer_analytics, _latest_intakes, _latest_excel, _latest_sheets
     global _latest_intake, _latest_fg_stock
     global _latest_service_level, _latest_lead_time
     global _latest_service_level_mode, _latest_risk_service_levels
@@ -117,6 +139,24 @@ def _load_cache() -> None:
         rs = _cache_path("result.pkl")
         if rs.exists() and rs.stat().st_size > 0:
             _latest_result = pd.read_pickle(rs)
+        for result_file in CACHE_DIR.glob("result_*.pkl"):
+            sheet_name = urllib.parse.unquote_plus(result_file.stem.removeprefix("result_"))
+            try:
+                _latest_results[sheet_name] = pd.read_pickle(result_file)
+            except Exception:
+                continue
+        for intake_file in CACHE_DIR.glob("intake_*.pkl"):
+            sheet_name = urllib.parse.unquote_plus(intake_file.stem.removeprefix("intake_"))
+            try:
+                _latest_intakes[sheet_name] = pd.read_pickle(intake_file)
+            except Exception:
+                continue
+        for analytics_file in CACHE_DIR.glob("customer_analytics_*.json"):
+            sheet_name = urllib.parse.unquote_plus(analytics_file.stem.removeprefix("customer_analytics_"))
+            try:
+                _latest_customer_analytics[sheet_name] = json.loads(analytics_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
         in_ = _cache_path("intake.pkl")
         if in_.exists() and in_.stat().st_size > 0:
             _latest_intake = pd.read_pickle(in_)
@@ -222,6 +262,26 @@ def _df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _can_use_cached_result(
+    sheet_name: str,
+    service_level: float,
+    service_level_mode: str,
+    service_level_map: dict[str, float] | None,
+    lead_time: int,
+) -> bool:
+    if sheet_name not in _latest_results:
+        return False
+    if service_level != _latest_service_level:
+        return False
+    if service_level_mode != _latest_service_level_mode:
+        return False
+    if lead_time != _latest_lead_time:
+        return False
+    if service_level_mode == "risk":
+        return _latest_risk_service_levels == service_level_map
+    return _latest_risk_service_levels is None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -232,9 +292,9 @@ def health() -> dict[str, str]:
 
 
 @app.post("/sheets")
-async def upload_and_list_sheets(file: UploadFile = File(...)) -> list[str]:
+async def upload_and_list_sheets(file: UploadFile = File(...)) -> dict[str, list[str]]:
     """Upload a workbook and return its sheet names (cached server-side)."""
-    global _latest_workbook, _latest_sheets
+    global _latest_result, _latest_results, _latest_customer_analytics, _latest_intakes, _latest_workbook, _latest_sheets
 
     if not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only Excel files are supported")
@@ -246,31 +306,40 @@ async def upload_and_list_sheets(file: UploadFile = File(...)) -> list[str]:
     try:
         sheets = _list_sheets(content)
         # A new workbook invalidates any previously computed results — both in
-        # memory and on disk — so a fresh upload never serves stale data
+        # memory and on disk — so a fresh upload never serves stale data.
         _latest_result = None
+        _latest_results = {}
+        _latest_intakes = {}
+        _latest_customer_analytics = {}
         _latest_excel = None
         _latest_intake = None
         for stale in ("excel.bin", "result.pkl", "intake.pkl"):
             p = _cache_path(stale)
             if p.exists():
                 p.unlink()
+        for stale in CACHE_DIR.glob("result_*.pkl"):
+            stale.unlink()
+        for stale in CACHE_DIR.glob("intake_*.pkl"):
+            stale.unlink()
+        for stale in CACHE_DIR.glob("customer_analytics_*.json"):
+            stale.unlink()
         _latest_workbook = content
         _latest_sheets = sheets
         _persist_cache()
-        return sheets
+        return {"sheets": sheets, "cachedSheets": []}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to read workbook: {exc}") from exc
 
 
 @app.get("/sheets")
-def list_cached_sheets() -> list[str]:
+def list_cached_sheets() -> dict[str, list[str]]:
     """Return cached sheet names from a previous upload."""
     if not _latest_sheets:
         raise HTTPException(
             status_code=404,
             detail="No workbook cached. Upload via POST /sheets first.",
         )
-    return _latest_sheets
+    return {"sheets": _latest_sheets, "cachedSheets": list(_latest_results.keys())}
 
 
 @app.post("/process")
@@ -303,7 +372,7 @@ async def process(
     ``st_*`` / ``dy_*`` metric groups, the full hierarchical
     ABC + RFM + Risk classification, and a per-SKU ``service_level`` column.
     """
-    global _latest_result, _latest_excel, _latest_workbook, _latest_sheets, _latest_intake
+    global _latest_result, _latest_results, _latest_customer_analytics, _latest_intakes, _latest_excel, _latest_workbook, _latest_sheets, _latest_intake
     global _latest_fg_stock
     global _latest_service_level, _latest_lead_time
     global _latest_service_level_mode, _latest_risk_service_levels
@@ -339,6 +408,7 @@ async def process(
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty")
         _latest_workbook = content
+        _latest_sheets = _list_sheets(content)
     else:
         content = _latest_workbook
         if content is None:
@@ -356,25 +426,64 @@ async def process(
         fg_stock = _latest_fg_stock
 
     try:
-        df = _run(content, sheet_name, service_level, lead_time, service_level_map, fg_stock)
-        _latest_sheets = [sheet_name]
-        _latest_result = df.copy()
-        _latest_excel = _df_to_excel_bytes(df)
-        _latest_service_level = service_level
-        _latest_service_level_mode = service_level_mode
-        _latest_risk_service_levels = dict(service_level_map) if service_level_map else None
-        _latest_lead_time = lead_time
+        if file is None and _can_use_cached_result(sheet_name, service_level, service_level_mode, service_level_map, lead_time):
+            df = _latest_results[sheet_name].copy()
+            _latest_result = df.copy()
+            _latest_excel = _df_to_excel_bytes(df)
+            _latest_service_level = service_level
+            _latest_service_level_mode = service_level_mode
+            _latest_risk_service_levels = dict(service_level_map) if service_level_map else None
+            _latest_lead_time = lead_time
+            _latest_intake = _latest_intakes.get(sheet_name)
 
-        # Also compute customer analytics from the same workbook
-        from tempfile import NamedTemporaryFile
-        with NamedTemporaryFile(suffix=".xlsx") as tmp:
-            tmp.write(content)
-            tmp.flush()
-            intake = load_order_intake(tmp.name, sheet_name=sheet_name)
-        _latest_intake = intake.copy()
-        customer_analytics = run_customer_analytics(intake)
+            customer_analytics = _latest_customer_analytics.get(sheet_name)
+            if customer_analytics is None:
+                if _latest_intake is not None:
+                    customer_analytics = run_customer_analytics(_latest_intake)
+                    _latest_customer_analytics[sheet_name] = customer_analytics
+                else:
+                    with NamedTemporaryFile(suffix=".xlsx") as tmp:
+                        tmp.write(content)
+                        tmp.flush()
+                        intake = load_order_intake(tmp.name, sheet_name=sheet_name)
+                    _latest_intakes[sheet_name] = intake.copy()
+                    _latest_intake = intake.copy()
+                    customer_analytics = run_customer_analytics(intake)
+                    _latest_customer_analytics[sheet_name] = customer_analytics
+        else:
+            df = _run(content, sheet_name, service_level, lead_time, service_level_map, fg_stock)
+            _latest_results[sheet_name] = df.copy()
+            _latest_result = df.copy()
+            _latest_excel = _df_to_excel_bytes(df)
+            _latest_service_level = service_level
+            _latest_service_level_mode = service_level_mode
+            _latest_risk_service_levels = dict(service_level_map) if service_level_map else None
+            _latest_lead_time = lead_time
 
-        _persist_cache()
+            # Also compute customer analytics from the same workbook
+            with NamedTemporaryFile(suffix=".xlsx") as tmp:
+                tmp.write(content)
+                tmp.flush()
+                intake = load_order_intake(tmp.name, sheet_name=sheet_name)
+            _latest_intake = intake.copy()
+            customer_analytics = run_customer_analytics(intake)
+            _latest_customer_analytics[sheet_name] = customer_analytics
+
+            if _latest_sheets:
+                for other_sheet in _latest_sheets:
+                    if other_sheet == sheet_name or other_sheet in _latest_results:
+                        continue
+                    try:
+                        other_df = _run(content, other_sheet, service_level, lead_time, service_level_map, fg_stock)
+                        _latest_results[other_sheet] = other_df.copy()
+                        with NamedTemporaryFile(suffix=".xlsx") as tmp:
+                            tmp.write(content)
+                            tmp.flush()
+                            other_intake = load_order_intake(tmp.name, sheet_name=other_sheet)
+                        self_customer_analytics = run_customer_analytics(other_intake)
+                        _latest_customer_analytics[other_sheet] = self_customer_analytics
+                    except Exception:
+                        continue
 
         return {
             "sheetName": sheet_name,
@@ -386,6 +495,7 @@ async def process(
             "columns": list(df.columns),
             "data": df.to_dict(orient="records"),
             "customerAnalytics": customer_analytics,
+            "cachedSheets": list(_latest_results.keys()),
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

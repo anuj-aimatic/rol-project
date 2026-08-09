@@ -18,7 +18,7 @@ export function LoginPage() {
     event.preventDefault()
     const success = login(username, password)
     if (!success) {
-      setError('Please use username "admin" and password "password123".')
+      setError('Wrong user id or password.')
       return
     }
     navigate('/overview')

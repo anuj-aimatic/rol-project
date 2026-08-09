@@ -325,6 +325,7 @@ export function OverviewPage() {
   const [file, setFile] = useState<File | null>(null)
   const [fgStockFile, setFgStockFile] = useState<File | null>(null)
   const [sheets, setSheets] = useState<string[]>([])
+  const [cachedSheets, setCachedSheets] = useState<string[]>([])
   const [selectedSheet, setSelectedSheet] = useState(persisted.selectedSheet)
   const [serviceLevel, setServiceLevel] = useState(persisted.serviceLevel)
   const [serviceLevelMode, setServiceLevelMode] = useState<ServiceLevelMode>(persisted.serviceLevelMode)
@@ -349,10 +350,13 @@ export function OverviewPage() {
     if (sheets.length > 0 || loadingSheets) return
     const load = async () => {
       try {
-        const res = await apiClient.get<string[]>('/sheets')
-        if (Array.isArray(res.data) && res.data.length > 0) {
-          setSheets(res.data)
-          setSelectedSheet((p) => (p ? p : res.data[0]))
+        const res = await apiClient.get<{ sheets: string[]; cachedSheets: string[] }>('/sheets')
+        const fetched = Array.isArray(res.data) ? res.data : res.data.sheets ?? []
+        const cached = Array.isArray(res.data) ? [] : res.data.cachedSheets ?? []
+        if (fetched.length > 0) {
+          setSheets(fetched)
+          setCachedSheets(cached)
+          setSelectedSheet((p) => (p ? p : fetched[0]))
         }
       } catch {
         /* expected on first visit */
@@ -360,6 +364,51 @@ export function OverviewPage() {
     }
     void load()
   }, [loadingSheets, sheets.length])
+
+  useEffect(() => {
+    if (!selectedSheet || processing || loadingSheets) return
+    if (!cachedSheets.includes(selectedSheet)) return
+    if (result?.sheetName === selectedSheet) return
+
+    const loadCachedSheet = async () => {
+      setProcessing(true)
+      try {
+        const form = new FormData()
+        form.append('sheet_name', selectedSheet)
+        form.append('service_level', String(serviceLevel))
+        form.append('lead_time', '4')
+        form.append('service_level_mode', serviceLevelMode)
+        form.append('risk_high_external', String(riskLevels.High_Risk_External / 100))
+        form.append('risk_low_external', String(riskLevels.Low_Risk_External / 100))
+        form.append('risk_medium_external', String(riskLevels.Medium_Risk_External / 100))
+        form.append('risk_medium_internal', String(riskLevels.Medium_Risk_Internal / 100))
+
+        const res = await apiClient.post<PipelineResult & { cachedSheets?: string[] }>('/process', form, {
+          timeout: 300_000,
+        })
+
+        setResult({
+          sheetName: res.data.sheetName,
+          serviceLevel: res.data.serviceLevel,
+          serviceLevelMode: res.data.serviceLevelMode ?? 'global',
+          riskServiceLevels: res.data.riskServiceLevels ?? null,
+          leadTime: res.data.leadTime,
+          rows: res.data.rows,
+          columns: res.data.columns,
+          data: res.data.data,
+          processedAt: new Date().toISOString(),
+          customerAnalytics: res.data.customerAnalytics,
+        })
+        setCachedSheets(res.data.cachedSheets ?? cachedSheets)
+      } catch {
+        // If cached load fails, keep the current result and let the user run.
+      } finally {
+        setProcessing(false)
+      }
+    }
+
+    void loadCachedSheet()
+  }, [selectedSheet, cachedSheets, result, processing, loadingSheets, serviceLevel, serviceLevelMode, riskLevels])
 
   const summaryStats = useMemo(() => {
     if (!result) return null
@@ -475,6 +524,7 @@ export function OverviewPage() {
   const onFileChange = async (nextFile: File | null) => {
     setFile(nextFile)
     setSheets([])
+    setCachedSheets([])
     setSelectedSheet('')
     setResult(null)
 
@@ -484,14 +534,16 @@ export function OverviewPage() {
     try {
       const form = new FormData()
       form.append('file', nextFile)
-      const res = await apiClient.post<string[] | { sheets: string[] }>('/sheets', form, {
+      const res = await apiClient.post<{ sheets: string[]; cachedSheets: string[] }>('/sheets', form, {
         timeout: 180_000,
       })
-      const fetched = Array.isArray(res.data) ? res.data : (res.data as Record<string, string[]>).sheets ?? []
+      const fetched = Array.isArray(res.data) ? res.data : res.data.sheets ?? []
+      const cached = Array.isArray(res.data) ? [] : res.data.cachedSheets ?? []
       if (fetched.length === 0) {
         toast.error('No worksheets detected in this workbook.')
       }
       setSheets(fetched)
+      setCachedSheets(cached)
       if (fetched.length > 0) setSelectedSheet(fetched[0])
       toast.success('Workbook uploaded. Sheets loaded.')
     } catch (err) {
@@ -535,7 +587,7 @@ export function OverviewPage() {
       form.append('risk_medium_external', String(riskLevels.Medium_Risk_External / 100))
       form.append('risk_medium_internal', String(riskLevels.Medium_Risk_Internal / 100))
 
-      const res = await apiClient.post<PipelineResult>('/process', form, {
+      const res = await apiClient.post<PipelineResult & { cachedSheets?: string[] }>('/process', form, {
         timeout: 300_000,
       })
 
@@ -551,6 +603,7 @@ export function OverviewPage() {
         processedAt: new Date().toISOString(),
         customerAnalytics: res.data.customerAnalytics,
       })
+      setCachedSheets(res.data.cachedSheets ?? [])
 
       toast.success(`Analysis complete — ${res.data.rows.toLocaleString()} products.`)
     } catch (err) {
@@ -634,6 +687,8 @@ export function OverviewPage() {
 
   /* ---------- Render ---------- */
 
+  const isSelectedSheetCached = selectedSheet !== '' && cachedSheets.includes(selectedSheet)
+
   return (
     <div>
       <PageHeader
@@ -707,7 +762,7 @@ export function OverviewPage() {
               </label>
               <label className="flex h-11 cursor-pointer items-center justify-between rounded-xl border border-dashed border-border bg-background px-3 text-sm hover:bg-muted/40">
                 <span className="truncate text-muted-foreground">
-                  {file?.name ?? (sheets.length > 0 ? 'Cached in backend' : 'Choose .xlsx file')}
+                  {file?.name ?? (sheets.length > 0 ? 'Stored in backend' : 'Choose .xlsx file')}
                 </span>
                 {loadingSheets ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                 <input
@@ -743,6 +798,15 @@ export function OverviewPage() {
                   </option>
                 ))}
               </select>
+              {isSelectedSheetCached ? (
+                <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+                  Stored results for this sheet are available and will be loaded automatically.
+                </p>
+              ) : result && selectedSheet && selectedSheet !== result.sheetName ? (
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  Selected sheet differs from stored results — run Step 4 to refresh results for this sheet.
+                </p>
+              ) : null}
             </div>
 
             {/* Step 3: Service level mode + level(s) */}

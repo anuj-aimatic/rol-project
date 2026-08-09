@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { type ReactNode } from 'react'
 
 import { AppShellLayout } from '@/layouts/app-shell-layout'
 import { AnalyticsPage } from '@/pages/analytics-page'
@@ -12,7 +13,7 @@ import { ReportsPage } from '@/pages/reports-page'
 import { SettingsPage } from '@/pages/settings-page'
 import { useAuth } from '@/services/state/auth-context'
 
-function RequireAuth({ children }: { children: JSX.Element }) {
+function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth()
 
   if (!user) {
