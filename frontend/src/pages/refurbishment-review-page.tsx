@@ -615,7 +615,7 @@ export function RefurbishmentReviewPage() {
     <div>
       <PageHeader
         title="Refurbishment Review"
-        subtitle="SKU-level table behind the Refurbishment Budget — Refurb Qty & Budget shown for both ROL bases; filter by column to verify the totals."
+        subtitle="SKU-level table behind the Refurbishment Budget"
         actions={
           <Link
             to="/overview"
@@ -633,7 +633,7 @@ export function RefurbishmentReviewPage() {
             Refurbishment Detail
           </span>
         }
-        description="Every SKU that requires replenishment under either ROL basis, with the inputs and outputs of the calculation. Click the sliders icon in any column header to filter: text columns open a value list, numeric columns support comparison (=, ≠, <, ≤, >, ≥)."
+        // description="Every SKU that requires replenishment under either ROL basis, with the inputs and outputs of the calculation. Click the sliders icon in any column header to filter: text columns open a value list, numeric columns support comparison (=, ≠, <, ≤, >, ≥)."
       >
         {/* ---- Toolbar ---- */}
         <div className="mb-4 grid gap-3 lg:grid-cols-[1fr_auto]">
