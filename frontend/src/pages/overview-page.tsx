@@ -719,15 +719,20 @@ export function OverviewPage() {
                     Service level
                   </label>
                   <div className="flex gap-2">
-                    <input
-                      type="number"
-                      min={0.01}
-                      max={0.99}
-                      step={0.01}
-                      value={serviceLevel}
-                      onChange={(e) => setServiceLevel(Number(e.target.value))}
-                      className="h-11 w-full min-w-0 rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-ring"
-                    />
+                    <div className="relative w-full">
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        step={1}
+                        value={serviceLevel * 100}
+                        onChange={(e) => setServiceLevel(Number(e.target.value) / 100)}
+                        className="h-11 w-full min-w-0 rounded-xl border border-border bg-background px-3 pr-10 text-sm outline-none focus:border-ring"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                        %
+                      </span>
+                    </div>
                     {result && (
                       <button
                         type="button"
