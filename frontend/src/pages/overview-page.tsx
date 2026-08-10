@@ -1,10 +1,23 @@
-import { Activity, Info, Loader2, Upload } from 'lucide-react'
+import { Activity, Info, Loader2, Table2, Upload } from 'lucide-react'
 import axios from 'axios'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
+import {
+  computeRefurbishmentSkus,
+  formatMoney,
+  MONEY_FORMAT_OPTIONS,
+  RISK_CATEGORY_LABELS,
+  RISK_CATEGORY_ORDER,
+  RISK_CATEGORY_TONES,
+  ROL_MODE_LABELS,
+  summarizeRefurbishment,
+  type MoneyFormat,
+  type RolMode,
+} from '@/lib/refurbishment'
 import { apiClient } from '@/services/api/client'
 import {
   average,
@@ -32,82 +45,6 @@ const DEFAULT_RISK_LEVELS: RiskLevels = {
   Low_Risk_External: 85,
   Medium_Risk_External: 65,
   Medium_Risk_Internal: 85,
-}
-
-/* ---- Refurbishment Budget (Executive Summary card) ---- */
-
-/** Canonical risk categories, in display order. */
-const RISK_CATEGORY_ORDER = [
-  'High_Risk_External',
-  'Medium_Risk_External',
-  'Medium_Risk_Internal',
-  'Low_Risk_External',
-  'Low_Risk_Internal',
-] as const
-
-const RISK_CATEGORY_LABELS: Record<string, string> = {
-  High_Risk_External: 'High Risk External',
-  Medium_Risk_External: 'Medium Risk External',
-  Medium_Risk_Internal: 'Medium Risk Internal',
-  Low_Risk_External: 'Low Risk External',
-  Low_Risk_Internal: 'Low Risk Internal',
-}
-
-const RISK_CATEGORY_TONES: Record<string, string> = {
-  High_Risk_External: 'bg-red-500',
-  Medium_Risk_External: 'bg-amber-500',
-  Medium_Risk_Internal: 'bg-sky-500',
-  Low_Risk_External: 'bg-emerald-500',
-  Low_Risk_Internal: 'bg-teal-500',
-}
-
-/** ROL basis used by the Refurbishment Budget card. */
-type RolMode = 'static' | 'dynamic'
-
-/** Pipeline columns used per ROL basis. */
-const REFURB_COLUMNS: Record<
-  RolMode,
-  { rol: string; safetyStock: string; totalSales: string }
-> = {
-  static: { rol: 'rol_static', safetyStock: 'st_safety_stock', totalSales: 'st_total_sales' },
-  dynamic: { rol: 'rol_dynamic', safetyStock: 'dy_safety_stock', totalSales: 'dy_total_sales' },
-}
-
-const ROL_MODE_LABELS: Record<RolMode, string> = {
-  static: 'Static',
-  dynamic: 'Dynamic',
-}
-
-/** Format a monetary amount in Indian Rupees with thousands separators. */
-const inr = (v: number) => '₹' + Math.round(v).toLocaleString('en-IN')
-
-/** Display scale for monetary values on the Refurbishment Budget card. */
-type MoneyFormat = 'full' | 'lakhs' | 'crores'
-
-const MONEY_FORMAT_OPTIONS: { key: MoneyFormat; label: string; title: string }[] = [
-  { key: 'full', label: '₹ Full', title: 'Exact amount in Indian Rupees' },
-  { key: 'lakhs', label: '₹ Lakhs', title: 'Amount in lakhs (1 L = ₹1,00,000)' },
-  { key: 'crores', label: '₹ Crores', title: 'Amount in crores (1 Cr = ₹1,00,00,000)' },
-]
-
-/** Format a monetary amount at the selected display scale. */
-function formatMoney(v: number, fmt: MoneyFormat): string {
-  switch (fmt) {
-    case 'lakhs': {
-      const lakhs = v / 1e5
-      // Too small to represent in lakhs — fall back to the exact figure
-      if (v > 0 && lakhs < 0.005) return inr(v)
-      return `₹${lakhs.toLocaleString('en-IN', { maximumFractionDigits: 2 })} L`
-    }
-    case 'crores': {
-      const crores = v / 1e7
-      // Too small to represent in crores — fall back to the exact figure
-      if (v > 0 && crores < 0.005) return inr(v)
-      return `₹${crores.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr`
-    }
-    default:
-      return inr(v)
-  }
 }
 
 /* ---- Refurbishment Budget ⓘ explanation popover ---- */
@@ -432,78 +369,11 @@ export function OverviewPage() {
 
   /* Refurbishment Budget — working capital needed to replenish SKUs back to
    * their recommended ROL (Static or Dynamic, per rolMode). Derived purely
-   * from existing pipeline outputs; this never modifies the ROL, Safety Stock,
-   * or Inventory Explorer calculations. */
+   * from existing pipeline outputs via the shared library (used identically
+   * by the Refurbishment Review page), so both views always agree. */
   const refurbishment = useMemo(() => {
     if (!result || result.data.length === 0) return null
-
-    const cols = REFURB_COLUMNS[rolMode]
-    const perCat = new Map<string, { skus: number; qty: number; budget: number }>()
-    let totalSkus = 0
-    let totalQty = 0
-    let totalBudget = 0
-
-    for (const row of result.data) {
-      const open = toNumeric(row['Open FG Stock'])
-      const rol = toNumeric(row[cols.rol])
-      const ss = toNumeric(row[cols.safetyStock])
-      // Refurbishment Qty = ROL − Open FG Stock when open stock is at or below
-      // the Safety Stock of the selected ROL basis; otherwise 0 (never negative).
-      const qty = open <= ss ? Math.max(0, rol - open) : 0
-      if (qty <= 0) continue
-
-      // Unit Cost = (Monetary ÷ total sales for the selected basis) × 65%
-      const sales = toNumeric(row[cols.totalSales])
-      const unitCost = sales > 0 ? (toNumeric(row['Monetary']) / sales) * 0.65 : 0
-      const budget = qty * unitCost
-
-      const cat = String(row['Risk_Category'] ?? 'Unknown') || 'Unknown'
-      const cur = perCat.get(cat) ?? { skus: 0, qty: 0, budget: 0 }
-      cur.skus += 1
-      cur.qty += qty
-      cur.budget += budget
-      perCat.set(cat, cur)
-      totalSkus += 1
-      totalQty += qty
-      totalBudget += budget
-    }
-
-    const rows: {
-      key: string
-      label: string
-      tone: string
-      skus: number
-      qty: number
-      budget: number
-    }[] = RISK_CATEGORY_ORDER.map((key) => {
-      const c = perCat.get(key)
-      return {
-        key,
-        label: RISK_CATEGORY_LABELS[key],
-        tone: RISK_CATEGORY_TONES[key],
-        skus: c?.skus ?? 0,
-        qty: c?.qty ?? 0,
-        budget: c?.budget ?? 0,
-      }
-    })
-    // Defensive: surface any category outside the canonical five
-    for (const [key, c] of perCat) {
-      if (!RISK_CATEGORY_ORDER.includes(key as (typeof RISK_CATEGORY_ORDER)[number])) {
-        rows.push({
-          key,
-          label: RISK_CATEGORY_LABELS[key] ?? key,
-          tone: 'bg-muted',
-          skus: c.skus,
-          qty: c.qty,
-          budget: c.budget,
-        })
-      }
-    }
-
-    // Sort by SKU count, highest first (budget breaks any remaining tie).
-    rows.sort((a, b) => b.skus - a.skus || b.budget - a.budget)
-
-    return { rows, totalSkus, totalQty, totalBudget }
+    return summarizeRefurbishment(computeRefurbishmentSkus(result.data, rolMode))
   }, [result, rolMode])
 
   const processSteps = useMemo(() => {
@@ -1207,6 +1077,15 @@ export function OverviewPage() {
                       })}
                     </div>
                   </div>
+
+                  <Link
+                    to="/refurbishment-review"
+                    title="Open the SKU-level table to verify every calculation for this ROL basis"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                  >
+                    <Table2 size={13} />
+                    Review SKUs
+                  </Link>
                 </div>
               </div>
 

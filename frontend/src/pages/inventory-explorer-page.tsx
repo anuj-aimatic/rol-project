@@ -2,16 +2,14 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  Check,
   FilterX,
   Search,
   SlidersHorizontal,
-  X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
+import { ColumnFilterPopover } from '@/components/common/column-filter-popover'
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
 import { useProcessedData } from '@/services/state/processed-data-context'
@@ -151,173 +149,6 @@ function fmtPct(v: unknown): string {
 /* ---------- Sort direction type ---------- */
 type SortDir = 'asc' | 'desc' | null
 
-/* ---------- Popover filter component ---------- */
-
-function ColumnFilterPopover({
-  col,
-  values,
-  selected,
-  onToggle,
-  onClose,
-  anchorEl,
-}: {
-  col: string
-  values: string[]
-  selected: Set<string>
-  onToggle: (v: string) => void
-  onClose: () => void
-  anchorEl: HTMLElement | null
-}) {
-  const popRef = useRef<HTMLDivElement>(null)
-  const [search, setSearch] = useState('')
-
-  // Close on click outside
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) {
-        onClose()
-      }
-    }
-    // Delay so the current click doesn't immediately close
-    const id = setTimeout(() => document.addEventListener('click', handleClick), 0)
-    return () => {
-      clearTimeout(id)
-      document.removeEventListener('click', handleClick)
-    }
-  }, [onClose])
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return values
-    const q = search.trim().toLowerCase()
-    return values.filter((v) => v.toLowerCase().includes(q))
-  }, [values, search])
-
-  const allSelected = values.length > 0 && values.every((v) => selected.has(v))
-  const noneSelected = selected.size === 0
-
-  // Position relative to anchor
-  const rect = anchorEl?.getBoundingClientRect()
-
-  const content = (
-    <div
-      ref={popRef}
-      className="w-56 rounded-xl border border-border bg-card shadow-2xl"
-      style={{
-        position: 'fixed',
-        top: rect ? rect.bottom + 4 : 0,
-        left: rect ? Math.min(rect.left, window.innerWidth - 260) : 0,
-        zIndex: 9999,
-        pointerEvents: 'auto',
-      }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <span className="text-xs font-semibold uppercase text-muted-foreground">
-          {COL_LABELS[col] ?? col}
-        </span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-        >
-          <X size={14} />
-        </button>
-      </div>
-
-      {/* Search */}
-      <div className="border-b border-border px-2 py-1.5">
-        <label className="relative block">
-          <Search
-            size={12}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-          />
-          <input
-            type="text"
-            placeholder="Search…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-7 w-full rounded-md border border-border bg-background pl-6 pr-2 text-xs outline-none focus:border-ring"
-          />
-        </label>
-      </div>
-
-      {/* Select All / Clear */}
-      <div className="flex items-center justify-between border-b border-border px-2 py-1">
-        <button
-          type="button"
-          onClick={() => {
-            if (allSelected) {
-              values.forEach((v) => {
-                if (selected.has(v)) onToggle(v)
-              })
-            } else {
-              values.forEach((v) => {
-                if (!selected.has(v)) onToggle(v)
-              })
-            }
-          }}
-          className="text-[11px] font-medium text-primary hover:underline"
-        >
-          {allSelected ? 'Clear All' : 'Select All'}
-        </button>
-        <span className="text-[10px] text-muted-foreground">
-          {selected.size} / {values.length}
-        </span>
-      </div>
-
-      {/* Checkbox list */}
-      <div className="max-h-48 overflow-y-auto px-1 py-1">
-        {filtered.length === 0 ? (
-          <p className="px-2 py-3 text-center text-[11px] text-muted-foreground">
-            No matches
-          </p>
-        ) : (
-          filtered.map((v) => {
-            const checked = selected.has(v)
-            return (
-              <label
-                key={v}
-                className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs hover:bg-muted/60 ${
-                  checked ? 'bg-primary/5 font-medium text-foreground' : 'text-muted-foreground'
-                }`}
-              >
-                <span
-                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
-                    checked
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border bg-background'
-                  }`}
-                >
-                  {checked && <Check size={10} strokeWidth={3} />}
-                </span>
-                <span className="truncate">{v}</span>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => onToggle(v)}
-                  className="sr-only"
-                />
-              </label>
-            )
-          })
-        )}
-      </div>
-
-      {/* Footer: show active count */}
-      {!noneSelected && (
-        <div className="border-t border-border px-3 py-1.5">
-          <p className="text-[10px] text-muted-foreground">
-            {selected.size} value{selected.size > 1 ? 's' : ''} selected
-          </p>
-        </div>
-      )}
-    </div>
-  )
-
-  // Render via portal to body to avoid table overflow clipping
-  return createPortal(content, document.body)
-}
-
 /* ---------- Main page component ---------- */
 
 export function InventoryExplorerPage() {
@@ -333,6 +164,9 @@ export function InventoryExplorerPage() {
 
   // Popover state
   const [openPopover, setOpenPopover] = useState<string | null>(null)
+  // Anchor element of the currently-open popover (set on click, kept in state so
+  // render never reads the ref directly)
+  const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
   const popoverAnchorRef = useRef<Record<string, HTMLElement | null>>({})
 
   // ---------- columns ----------
@@ -353,19 +187,12 @@ export function InventoryExplorerPage() {
     [result],
   )
 
-  // ---------- unique values per column — LAZY (only computed when popover opens) ----------
-  const uniqueValuesCache = useRef<Record<string, string[]>>({})
-  // Clear cache when pipeline result changes (new data = new unique values)
-  useEffect(() => {
-    uniqueValuesCache.current = {}
-  }, [result])
-  const getUniqueValues = useCallback((col: string): string[] => {
-    if (!result) return []
-    if (uniqueValuesCache.current[col]) return uniqueValuesCache.current[col]
-
+  // ---------- unique values for the open column — LAZY (only the open popover computes) ----------
+  const openValues = useMemo(() => {
+    if (!openPopover || !result) return []
     const set = new Set<string>()
     for (const row of result.data) {
-      const v = fmt(cellValue(row, col), col)
+      const v = fmt(cellValue(row, openPopover), openPopover)
       if (v && v !== '—') set.add(v)
     }
     const sorted = [...set].sort((a, b) => {
@@ -374,9 +201,8 @@ export function InventoryExplorerPage() {
       if (!isNaN(na) && !isNaN(nb)) return na - nb
       return a.localeCompare(b)
     })
-    uniqueValuesCache.current[col] = sorted.slice(0, 100)
     return sorted.slice(0, 100)
-  }, [result, cellValue])
+  }, [openPopover, result, cellValue])
 
   // ---------- sort + filter rows ----------
   const filtered = useMemo(() => {
@@ -473,6 +299,7 @@ export function InventoryExplorerPage() {
     setSortDir(null)
     setVisibleCount(PAGE_SIZE)
     setOpenPopover(null)
+    setOpenAnchor(null)
   }
 
   // ---------- sort icon helper ----------
@@ -599,6 +426,8 @@ export function InventoryExplorerPage() {
                           }}
                           onClick={(e) => {
                             e.stopPropagation()
+                            // Ref is read inside the click handler, then kept in state
+                            setOpenAnchor(popoverAnchorRef.current[col] ?? null)
                             setOpenPopover((prev) => (prev === col ? null : col))
                           }}
                           className={`rounded p-0.5 transition-colors hover:bg-muted/80 ${
@@ -614,12 +443,12 @@ export function InventoryExplorerPage() {
                       {/* Popover */}
                       {openPopover === col && (
                         <ColumnFilterPopover
-                          col={col}
-                          values={getUniqueValues(col)}
+                          label={COL_LABELS[col] ?? col}
+                          values={openValues}
                           selected={columnFilters[col] ?? new Set()}
                           onToggle={(v) => toggleFilter(col, v)}
                           onClose={() => setOpenPopover(null)}
-                          anchorEl={popoverAnchorRef.current[col]}
+                          anchorEl={openAnchor}
                         />
                       )}
                     </th>

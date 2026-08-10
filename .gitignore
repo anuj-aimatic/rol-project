@@ -48,3 +48,5 @@ frontend/.vite/
 # *.xlsx
 # ~$*
 !data/*.xlsx
+
+.log

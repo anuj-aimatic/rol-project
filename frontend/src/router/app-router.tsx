@@ -7,6 +7,7 @@ import { CustomerAnalyticsPage } from '@/pages/customer-analytics-page'
 import { InventoryExplorerPage } from '@/pages/inventory-explorer-page'
 import { LoginPage } from '@/pages/login-page'
 import { OverviewPage } from '@/pages/overview-page'
+import { RefurbishmentReviewPage } from '@/pages/refurbishment-review-page'
 import { ProductDetailPage } from '@/pages/product-detail-page'
 import { ProductSegmentationPage } from '@/pages/product-segmentation-page'
 import { ReportsPage } from '@/pages/reports-page'
@@ -36,6 +37,7 @@ export function AppRouter() {
       >
         <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route path="/overview" element={<OverviewPage />} />
+        <Route path="/refurbishment-review" element={<RefurbishmentReviewPage />} />
         <Route path="/inventory-explorer" element={<InventoryExplorerPage />} />
         <Route path="/inventory-explorer/:itemCode" element={<ProductDetailPage />} />
         <Route path="/product-segmentation" element={<ProductSegmentationPage />} />
