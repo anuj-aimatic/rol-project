@@ -71,46 +71,65 @@ def _customer_analytics_cache_filename(sheet_name: str) -> str:
 
 
 def _persist_cache() -> None:
-    """Write the in-memory cache to disk so a restart doesn't lose the workbook."""
-    try:
-        if _latest_workbook:
-            with open(_cache_path("workbook.bin"), "wb") as f:
-                f.write(_latest_workbook)
-        if _latest_excel:
-            with open(_cache_path("excel.bin"), "wb") as f:
-                f.write(_latest_excel)
-        if _latest_sheets is not None:
-            with open(_cache_path("sheets.json"), "w") as f:
-                json.dump(_latest_sheets, f)
-        with open(_cache_path("params.json"), "w") as f:
-            json.dump(
+    """Write the in-memory cache to disk so a restart doesn't lose the workbook.
+
+    Best-effort, guarded per artifact: a single failure (e.g. a non-JSON value
+    inside customer analytics) must never block the critical files
+    (``result.pkl`` / ``intake.pkl`` / ``fg_stock.pkl``) from being written —
+    otherwise a restart would lose the processed data and /recompute-rol would
+    no longer be able to Apply.
+    """
+
+    def _persist_one(name: str, writer: object) -> None:
+        try:
+            writer()  # type: ignore[operator]
+        except Exception as exc:
+            print(f"[cache] failed to persist {name}: {exc}")
+
+    _persist_one("workbook.bin", lambda: _cache_path("workbook.bin").write_bytes(_latest_workbook) if _latest_workbook else None)
+    _persist_one("excel.bin", lambda: _cache_path("excel.bin").write_bytes(_latest_excel) if _latest_excel else None)
+    _persist_one("sheets.json", lambda: _cache_path("sheets.json").write_text(json.dumps(_latest_sheets)) if _latest_sheets is not None else None)
+    _persist_one(
+        "params.json",
+        lambda: _cache_path("params.json").write_text(
+            json.dumps(
                 {
                     "service_level": _latest_service_level,
                     "lead_time": _latest_lead_time,
                     "service_level_mode": _latest_service_level_mode,
                     "risk_service_levels": _latest_risk_service_levels,
-                },
-                f,
+                }
             )
-        if _latest_results:
-            for sheet_name, df in _latest_results.items():
-                df.to_pickle(_cache_path(_sheet_cache_filename(sheet_name)))
-        if _latest_intakes:
-            for sheet_name, intake in _latest_intakes.items():
-                intake.to_pickle(_cache_path(f"intake_{urllib.parse.quote_plus(sheet_name)}.pkl"))
-        if _latest_customer_analytics:
-            for sheet_name, analytics in _latest_customer_analytics.items():
-                with open(_cache_path(_customer_analytics_cache_filename(sheet_name)), "w", encoding="utf-8") as f:
-                    json.dump(analytics, f)
-        if _latest_result is not None:
-            _latest_result.to_pickle(_cache_path("result.pkl"))
-        if _latest_intake is not None:
-            _latest_intake.to_pickle(_cache_path("intake.pkl"))
-        if _latest_fg_stock is not None:
-            _latest_fg_stock.to_pickle(_cache_path("fg_stock.pkl"))
-    except Exception:
-        # Cache is best-effort; never crash a request because of it
-        pass
+        ),
+    )
+    _persist_one(
+        "result_*.pkl",
+        lambda: [
+            df.to_pickle(_cache_path(_sheet_cache_filename(sheet_name)))
+            for sheet_name, df in _latest_results.items()
+        ],
+    )
+    _persist_one(
+        "intake_*.pkl",
+        lambda: [
+            intake.to_pickle(_cache_path(f"intake_{urllib.parse.quote_plus(sheet_name)}.pkl"))
+            for sheet_name, intake in _latest_intakes.items()
+        ],
+    )
+    _persist_one(
+        "customer_analytics_*.json",
+        lambda: [
+            # default=str keeps pandas/numpy/date values cacheable — the API
+            # response is still fully typed via FastAPI's jsonable_encoder.
+            _cache_path(_customer_analytics_cache_filename(sheet_name)).write_text(
+                json.dumps(analytics, default=str)
+            )
+            for sheet_name, analytics in _latest_customer_analytics.items()
+        ],
+    )
+    _persist_one("result.pkl", lambda: _latest_result.to_pickle(_cache_path("result.pkl")) if _latest_result is not None else None)
+    _persist_one("intake.pkl", lambda: _latest_intake.to_pickle(_cache_path("intake.pkl")) if _latest_intake is not None else None)
+    _persist_one("fg_stock.pkl", lambda: _latest_fg_stock.to_pickle(_cache_path("fg_stock.pkl")) if _latest_fg_stock is not None else None)
 
 
 def _load_cache() -> None:
@@ -262,6 +281,37 @@ def _df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _run_and_cache(
+    content: bytes,
+    sheet_name: str,
+    service_level: float,
+    lead_time: int,
+    service_level_map: dict[str, float] | None,
+    fg_stock: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Run the full pipeline for a sheet and populate the in-memory caches.
+
+    Shared by ``/process`` (fresh run) and ``/recompute-rol``'s last-resort
+    recovery so both always produce identical results. The ``_latest_*``
+    parameter globals are intentionally left to the callers, who set them
+    according to their own request semantics.
+    """
+    global _latest_result, _latest_results, _latest_customer_analytics, _latest_intakes, _latest_excel, _latest_intake
+
+    df = _run(content, sheet_name, service_level, lead_time, service_level_map, fg_stock)
+    _latest_results[sheet_name] = df.copy()
+    _latest_result = df.copy()
+    _latest_excel = _df_to_excel_bytes(df)
+    with NamedTemporaryFile(suffix=".xlsx") as tmp:
+        tmp.write(content)
+        tmp.flush()
+        intake = load_order_intake(tmp.name, sheet_name=sheet_name)
+    _latest_intakes[sheet_name] = intake.copy()
+    _latest_intake = intake.copy()
+    _latest_customer_analytics[sheet_name] = run_customer_analytics(intake)
+    return df
+
+
 def _can_use_cached_result(
     sheet_name: str,
     service_level: float,
@@ -280,6 +330,81 @@ def _can_use_cached_result(
     if service_level_mode == "risk":
         return _latest_risk_service_levels == service_level_map
     return _latest_risk_service_levels is None
+
+
+def _ensure_recompute_data(sheet_name: str | None) -> None:
+    """Make sure /recompute-rol has processed data to recompute.
+
+    Recovery ladder — Apply must work even if the API restarted since the
+    pipeline ran:
+
+      1. in-memory caches already hold the data (normal fast path; when
+         ``sheet_name`` is None this trusts the current global result);
+      2. restore from the disk cache (survives API restarts);
+      3. run the full pipeline for the requested sheet from the cached
+         workbook (last resort — e.g. an older cache written before /process
+         started persisting results), then persist it so the recovery sticks.
+
+    Raises HTTPException(400) only when none of these can produce data.
+    """
+    global _latest_workbook, _latest_sheets
+
+    def _ready() -> bool:
+        if _latest_intake is None or _latest_result is None:
+            return False
+        if sheet_name is not None and (
+            sheet_name not in _latest_results or sheet_name not in _latest_intakes
+        ):
+            return False
+        return True
+
+    if _ready():
+        return
+
+    _load_cache()  # the API may have restarted since the pipeline ran
+
+    if _ready():
+        return
+
+    # Last resort: run the full pipeline for the requested sheet from the
+    # cached workbook, using the last-applied parameters, so the recompute
+    # below applies the user's requested change exactly like the fast path.
+    content = _latest_workbook
+    if content is None:
+        wb = _cache_path("workbook.bin")
+        if wb.exists() and wb.stat().st_size > 0:
+            content = wb.read_bytes()
+            _latest_workbook = content
+    if content is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No processed data cached. Run the pipeline from Overview first.",
+        )
+
+    target = (
+        sheet_name if sheet_name is not None else (_latest_sheets[0] if _latest_sheets else None)
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No processed data cached. Run the pipeline from Overview first.",
+        )
+
+    try:
+        _run_and_cache(
+            content,
+            target,
+            _latest_service_level,
+            _latest_lead_time,
+            _latest_risk_service_levels,
+            _latest_fg_stock,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to prepare data for recompute: {exc}",
+        ) from exc
+    _persist_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -451,23 +576,14 @@ async def process(
                     customer_analytics = run_customer_analytics(intake)
                     _latest_customer_analytics[sheet_name] = customer_analytics
         else:
-            df = _run(content, sheet_name, service_level, lead_time, service_level_map, fg_stock)
-            _latest_results[sheet_name] = df.copy()
-            _latest_result = df.copy()
-            _latest_excel = _df_to_excel_bytes(df)
+            df = _run_and_cache(content, sheet_name, service_level, lead_time, service_level_map, fg_stock)
             _latest_service_level = service_level
             _latest_service_level_mode = service_level_mode
             _latest_risk_service_levels = dict(service_level_map) if service_level_map else None
             _latest_lead_time = lead_time
 
-            # Also compute customer analytics from the same workbook
-            with NamedTemporaryFile(suffix=".xlsx") as tmp:
-                tmp.write(content)
-                tmp.flush()
-                intake = load_order_intake(tmp.name, sheet_name=sheet_name)
-            _latest_intake = intake.copy()
-            customer_analytics = run_customer_analytics(intake)
-            _latest_customer_analytics[sheet_name] = customer_analytics
+            # Customer analytics were computed inside _run_and_cache
+            customer_analytics = _latest_customer_analytics.get(sheet_name)
 
             if _latest_sheets:
                 for other_sheet in _latest_sheets:
@@ -484,6 +600,10 @@ async def process(
                         _latest_customer_analytics[other_sheet] = self_customer_analytics
                     except Exception:
                         continue
+
+        # Persist the run so a backend restart (or a later /recompute-rol Apply)
+        # can recover these results from disk without re-running the pipeline.
+        _persist_cache()
 
         return {
             "sheetName": sheet_name,
@@ -521,7 +641,10 @@ async def recompute_rol(
 
     Uses the cached pipeline output + cached Order Intake; segmentation
     (ABC/RFM/Risk) is untouched, so any service level(s) can be applied in
-    seconds without re-running the full pipeline.
+    seconds without re-running the full pipeline. If no processed data is
+    cached (e.g. the API restarted since the run) it first recovers from the
+    disk cache, and as a last resort re-runs the full pipeline from the
+    cached workbook so Apply always works.
 
     Returns the same shape as ``/process`` (rows/columns/data + parameters).
     """
@@ -529,19 +652,6 @@ async def recompute_rol(
     global _latest_service_level, _latest_lead_time
     global _latest_service_level_mode, _latest_risk_service_levels
 
-    if _latest_intake is None or _latest_result is None:
-        raise HTTPException(
-            status_code=400,
-            detail="No processed data cached. Run the pipeline from Overview first.",
-        )
-    if sheet_name is not None:
-        if sheet_name not in _latest_results or sheet_name not in _latest_intakes:
-            raise HTTPException(
-                status_code=400,
-                detail="No cached result available for the selected sheet. Run the pipeline for that sheet first.",
-            )
-        _latest_result = _latest_results[sheet_name].copy()
-        _latest_intake = _latest_intakes[sheet_name].copy()
     if service_level_mode not in ("global", "risk"):
         raise HTTPException(status_code=400, detail="service_level_mode must be 'global' or 'risk'")
     if not (0 < service_level <= 1):
@@ -563,6 +673,14 @@ async def recompute_rol(
                     status_code=400,
                     detail=f"{name} service level must be between 0 and 1",
                 )
+
+    # Apply must work even after an API restart: recover from the disk cache
+    # first, then (last resort) run the full pipeline from the cached workbook.
+    _ensure_recompute_data(sheet_name)
+
+    if sheet_name is not None:
+        _latest_result = _latest_results[sheet_name].copy()
+        _latest_intake = _latest_intakes[sheet_name].copy()
 
     try:
         weekly = _build_weekly_from_intake(_latest_intake)
@@ -594,6 +712,8 @@ async def recompute_rol(
         df = enrich_with_fg_stock(df, fg_stock=_latest_fg_stock)
 
         _latest_result = df.copy()
+        if sheet_name is not None:
+            _latest_results[sheet_name] = df.copy()
         _latest_excel = _df_to_excel_bytes(df)
         _latest_service_level = service_level
         _latest_service_level_mode = service_level_mode
