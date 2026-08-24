@@ -74,7 +74,7 @@ def _compute_dmax(freq_df: pd.DataFrame, service_level: float) -> float:
     """Compute Dmax at service level using interpolation or nearest bucket.
 
     Edge case guard: if the zero-bucket dominates (cumulative probability >= service_level),
-    Dmax defaults to the second (first non-zero) bucket's **Lower** instead of its Upper.
+    Dmax defaults to the first non-zero bucket's Upper instead of 0.
     This prevents ROL=0 for items with sparse but actual demand.
     """
     if freq_df.empty or "Cum Probability" not in freq_df.columns:
@@ -82,11 +82,9 @@ def _compute_dmax(freq_df: pd.DataFrame, service_level: float) -> float:
 
     below = freq_df[freq_df["Cum Probability"] < service_level]
     if below.empty:
-        # Zero bucket alone exceeds service level -> take the second (first
-        # non-zero) bucket's Lower — the minimum real demand value (1 for any
-        # bin layout, since non-zero bins always start at 1).
+        # Zero bucket alone exceeds service level -> first non-zero bucket
         if len(freq_df) > 1:
-            return float(freq_df.iloc[1]["Lower"])
+            return float(freq_df.iloc[1]["Upper"])
         return 0.0
 
     below_row = below.iloc[-1]
@@ -100,10 +98,9 @@ def _compute_dmax(freq_df: pd.DataFrame, service_level: float) -> float:
     if gap > INTERPOLATION_THRESHOLD:
         frac = (service_level - below_row["Cum Probability"]) / gap
         dmax = below_row["Upper"] + frac * (above_row["Upper"] - below_row["Upper"])
-        # Guard: don't round down to 0 when non-zero demand exists — use the
-        # above bucket's Lower (minimum real demand) instead of its Upper
+        # Guard: don't round down to 0 when non-zero demand exists
         if round(dmax) == 0 and above_row["Upper"] > 0:
-            return float(above_row["Lower"])
+            return float(above_row["Upper"])
         return round(dmax)
 
     # Nearest bucket — prefer first non-zero bucket over zero bucket on ties
@@ -111,7 +108,7 @@ def _compute_dmax(freq_df: pd.DataFrame, service_level: float) -> float:
     idx = int(np.argmin(np.abs(probs - service_level)))
     result = float(freq_df.iloc[idx]["Upper"])
     if result == 0 and len(freq_df) > 1:
-        return float(freq_df.iloc[1]["Lower"])
+        return float(freq_df.iloc[1]["Upper"])
     return result
 
 
@@ -451,18 +448,15 @@ def _dmax_trace(freq_df: pd.DataFrame, service_level: float) -> dict[str, object
     below = freq_df[freq_df["Cum Probability"] < service_level]
     if below.empty:
         if len(freq_df) > 1:
-            dmax = float(freq_df.iloc[1]["Lower"])
+            dmax = float(freq_df.iloc[1]["Upper"])
             return {
                 "method": "zero-bucket guard",
                 "formula": (
                     "Service level falls inside the zero-demand bucket — Dmax = "
-                    "second (first non-zero) bucket's Lower"
+                    "first non-zero bucket's Upper"
                 ),
                 "below": None,
-                "above": {
-                    "lower": float(freq_df.iloc[1]["Lower"]),
-                    "upper": float(freq_df.iloc[1]["Upper"]),
-                },
+                "above": {"upper": dmax},
                 "fraction": None,
                 "dmax": dmax,
             }
@@ -498,7 +492,7 @@ def _dmax_trace(freq_df: pd.DataFrame, service_level: float) -> dict[str, object
         dmax = round(below_row["Upper"] + frac * (above_row["Upper"] - below_row["Upper"]))
         # Guard (matches _compute_dmax): don't round down to 0 when demand exists
         if dmax == 0 and above_row["Upper"] > 0:
-            dmax = float(above_row["Lower"])
+            dmax = float(above_row["Upper"])
         formula = (
             f"Dmax = {below_row['Upper']:.0f} + ({service_level:.2f} − "
             f"{float(below_row['Cum Probability']):.4f}) / "
@@ -526,13 +520,8 @@ def _dmax_trace(freq_df: pd.DataFrame, service_level: float) -> dict[str, object
     idx = int(np.argmin(np.abs(probs - service_level)))
     selected = float(freq_df.iloc[idx]["Upper"])
     dmax = selected
-    above: dict[str, object] | None = None
     if dmax == 0 and len(freq_df) > 1:
-        dmax = float(freq_df.iloc[1]["Lower"])
-        above = {
-            "lower": float(freq_df.iloc[1]["Lower"]),
-            "upper": float(freq_df.iloc[1]["Upper"]),
-        }
+        dmax = float(freq_df.iloc[1]["Upper"])
     return {
         "method": "nearest bucket",
         "formula": "Cumulative gap ≤ 5pp → pick the bucket nearest the service level",
@@ -540,7 +529,7 @@ def _dmax_trace(freq_df: pd.DataFrame, service_level: float) -> dict[str, object
             "upper": selected,
             "cum_probability": round(float(freq_df.iloc[idx]["Cum Probability"]), 4),
         },
-        "above": above,
+        "above": None,
         "fraction": None,
         "dmax": dmax,
     }
@@ -561,12 +550,6 @@ def _dmax_highlight_uppers(trace: dict[str, object], dmax: float) -> list[int]:
         if isinstance(above, dict) and above.get("upper") is not None:
             uppers.append(int(above["upper"]))
         return uppers
-    # Guard methods set Dmax to the second bin's Lower, but the row that decides
-    # it is the second bin itself — highlight that row via its real Upper.
-    if trace.get("method") in ("zero-bucket guard", "nearest bucket"):
-        above = trace.get("above")
-        if isinstance(above, dict) and above.get("upper") is not None:
-            return [int(above["upper"])]
     return [int(dmax)]
 
 
