@@ -1,6 +1,6 @@
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -35,10 +35,19 @@ interface FrequencyRow {
   weighted_sum: number
 }
 
+interface OrderLine {
+  oa_no: string
+  customer: string
+  date: string
+  qty: number
+  amount?: number | null
+}
+
 interface WeeklyRecord {
   year: number
   week: number
   demand: number
+  orders?: OrderLine[]
 }
 
 interface DmaxDetail {
@@ -113,12 +122,25 @@ function InputChips({ inputs }: { inputs: Record<string, unknown> }) {
 /* ---------- Weekly demand records table ---------- */
 
 function WeeklyRecordsTable({ rows }: { rows: WeeklyRecord[] }) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const total = rows.reduce((sum, r) => sum + r.demand, 0)
+  const hasOrders = rows.some((r) => r.orders && r.orders.length > 0)
+  const fmt = (v: number) => v.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
   return (
     <div className="mt-2 overflow-x-auto rounded-lg border border-border">
       <table className="min-w-full border-collapse text-xs">
         <thead className="bg-muted/60">
           <tr>
+            <th className="w-8 border-b border-border px-2 py-1" aria-label="Expand" />
             {['Year', 'Week', 'Weekly Demand (units)'].map((h) => (
               <th
                 key={h}
@@ -130,14 +152,75 @@ function WeeklyRecordsTable({ rows }: { rows: WeeklyRecord[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={`${r.year}-${r.week}`} className="odd:bg-background even:bg-card/40">
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.year}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.week}</td>
-              <td className="border-b border-border/60 px-2 py-1 font-mono">{r.demand}</td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const key = `${r.year}-${r.week}`
+            const orders = r.orders ?? []
+            const isOpen = expanded.has(key)
+            return (
+              <Fragment key={key}>
+                <tr className="odd:bg-background even:bg-card/40">
+                  <td className="border-b border-border/60 px-2 py-1">
+                    {orders.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => toggle(key)}
+                        className="flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        aria-expanded={isOpen}
+                        title={isOpen ? 'Hide child orders' : `Show ${orders.length} child order(s)`}
+                      >
+                        {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                        <span className="text-[10px] font-medium">{orders.length}</span>
+                      </button>
+                    ) : null}
+                  </td>
+                  <td className="border-b border-border/60 px-2 py-1 font-mono">{r.year}</td>
+                  <td className="border-b border-border/60 px-2 py-1 font-mono">{r.week}</td>
+                  <td className="border-b border-border/60 px-2 py-1 font-mono">{fmt(r.demand)}</td>
+                </tr>
+                {isOpen && orders.length > 0 && (
+                  <tr className="bg-muted/30">
+                    <td className="border-b border-border/60 px-2 py-1.5" />
+                    <td colSpan={3} className="border-b border-border/60 px-2 py-1.5">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Child orders — {fmt(r.demand)} = {orders.map((o) => fmt(o.qty)).join(' + ')}
+                        </p>
+                        <table className="min-w-full border-collapse text-[11px]">
+                          <thead>
+                            <tr className="text-muted-foreground">
+                              {['OA No', 'Customer', 'Date', 'Order Qty', 'Order Amount'].map((h) => (
+                                <th
+                                  key={h}
+                                  className="whitespace-nowrap border-b border-border/60 px-2 py-0.5 text-left font-semibold uppercase tracking-wide"
+                                >
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {orders.map((o, i) => (
+                              <tr key={`${o.oa_no}-${i}`} className="odd:bg-background even:bg-card/40">
+                                <td className="border-b border-border/40 px-2 py-0.5 font-mono">{o.oa_no}</td>
+                                <td className="border-b border-border/40 px-2 py-0.5 font-mono">{o.customer}</td>
+                                <td className="border-b border-border/40 px-2 py-0.5 font-mono">{o.date}</td>
+                                <td className="border-b border-border/40 px-2 py-0.5 font-mono">{fmt(o.qty)}</td>
+                                <td className="border-b border-border/40 px-2 py-0.5 font-mono">
+                                  {o.amount !== null && o.amount !== undefined ? fmt(o.amount) : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
           <tr className="bg-muted/40">
+            <td className="px-2 py-1" />
             <td className="px-2 py-1 text-[11px] font-semibold text-muted-foreground" colSpan={2}>
               Total (units)
             </td>
@@ -147,6 +230,12 @@ function WeeklyRecordsTable({ rows }: { rows: WeeklyRecord[] }) {
           </tr>
         </tbody>
       </table>
+      {hasOrders && (
+        <p className="mt-1 px-2 pb-1.5 text-[11px] text-muted-foreground">
+          Expand a week (chevron) to see the child order lines from the deduped Order Intake that
+          sum into that week&apos;s demand.
+        </p>
+      )}
     </div>
   )
 }

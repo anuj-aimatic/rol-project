@@ -553,11 +553,47 @@ def _dmax_highlight_uppers(trace: dict[str, object], dmax: float) -> list[int]:
     return [int(dmax)]
 
 
+def _weekly_child_orders(orders_df: pd.DataFrame) -> dict[tuple[int, int], list[dict[str, object]]]:
+    """Group an item's deduped order lines by Year-Week.
+
+    Uses the exact same Year/Week bucketing as ``_build_weekly_from_intake``
+    (``Year = dt.year``, ``Week = %U + 1``), so each child order listed under a
+    week sums — with its siblings — to that week's aggregated weekly demand.
+    """
+    dd = orders_df.copy()
+    if "OriginalOA_Date" not in dd.columns or "Order_Qty" not in dd.columns:
+        return {}
+    try:
+        dd["Year"] = dd["OriginalOA_Date"].dt.year.astype(int)
+        dd["Week"] = dd["OriginalOA_Date"].dt.strftime("%U").astype(int) + 1
+    except (AttributeError, TypeError, ValueError):
+        return {}
+
+    out: dict[tuple[int, int], list[dict[str, object]]] = {}
+    for _, r in dd.iterrows():
+        amount: float | None = None
+        if "Order_Amount" in dd.columns and pd.notna(r.get("Order_Amount")):
+            amount = round(float(r["Order_Amount"]), 2)
+        out.setdefault((int(r["Year"]), int(r["Week"])), []).append(
+            {
+                "oa_no": str(r.get("OA_No", "")),
+                "customer": str(r.get("Party_Code", "")),
+                "date": pd.Timestamp(r["OriginalOA_Date"]).date().isoformat(),
+                "qty": float(r["Order_Qty"]),
+                "amount": amount,
+            }
+        )
+    for lines in out.values():
+        lines.sort(key=lambda o: (str(o["date"]), str(o["oa_no"])))
+    return out
+
+
 def compute_rol_steps_for_item(
     weekly: pd.DataFrame,
     item_code: str,
     service_level: float = DEFAULT_SERVICE_LEVEL,
     lead_time: float = DEFAULT_LEAD_TIME_WEEKS,
+    orders_df: pd.DataFrame | None = None,
 ) -> dict[str, object] | None:
     """Build a full step-by-step calculation trace for Static & Dynamic ROL.
 
@@ -565,6 +601,10 @@ def compute_rol_steps_for_item(
     product detail page can walk a stakeholder through the exact numbers.
     The final ``rol`` values are computed with the exact same helpers as
     ``add_rol_columns``, so the trace always agrees with the pipeline output.
+
+    ``orders_df`` (optional) is the item's deduped order lines from the Order
+    Intake; when provided, each weekly record carries a child ``orders`` list
+    (OA_No, customer, date, qty, amount) that sums to the weekly demand.
 
     Returns ``None`` when the item has no weekly demand records.
     """
@@ -575,13 +615,21 @@ def compute_rol_steps_for_item(
     total_weeks = _compute_total_weeks(weekly)
 
     # Raw weekly rows (Year, Week, Weekly Demand) — computed once and shared by
-    # both Static & Dynamic blocks so users can verify the calculation by hand
+    # both Static & Dynamic blocks so users can verify the calculation by hand.
+    # When child order lines are available, attach them so each week's demand
+    # can be traced back to the orders aggregated into it.
+    child_orders = _weekly_child_orders(orders_df) if orders_df is not None and not orders_df.empty else {}
     weekly_records = sorted(
         (
             {
                 "year": int(r["Year"]),
                 "week": int(r["Week"]),
                 "demand": float(r["Weekly Demand"]),
+                **(
+                    {"orders": child_orders[(int(r["Year"]), int(r["Week"]))]}
+                    if child_orders.get((int(r["Year"]), int(r["Week"])))
+                    else {}
+                ),
             }
             for _, r in w.iterrows()
         ),

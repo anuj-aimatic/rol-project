@@ -799,7 +799,9 @@ def product_rol_steps(item_code: str) -> dict[str, object]:
         # The intake "Lead Time" column is in DAYS — convert to weeks (÷7).
         lead_time = int(_latest_lead_time)
         if "Lead Time" in _latest_intake.columns:
-            lt_rows = _latest_intake.loc[_latest_intake["Item_Code"] == item_code, "Lead Time"]
+            lt_rows = _latest_intake.loc[
+                (_latest_intake["Item_Code"].astype(str) == str(item_code)), "Lead Time"
+            ]
             if not lt_rows.mode().empty:
                 lead_time = int(lt_rows.mode().iloc[0] / DAYS_PER_WEEK)
 
@@ -812,11 +814,19 @@ def product_rol_steps(item_code: str) -> dict[str, object]:
                 risk_cat = str(item_row.iloc[0]["Risk_Category"])
                 service_level = _latest_risk_service_levels.get(risk_cat, service_level)
 
+        # Child orders: the item's deduped order lines from the cached intake,
+        # grouped per Year-Week so the UI can expand a week and show the orders
+        # (OA_No, customer, date, qty, amount) summed into its weekly demand.
+        item_orders = _latest_intake.loc[
+            _latest_intake["Item_Code"].astype(str) == str(item_code)
+        ]
+
         steps = compute_rol_steps_for_item(
             weekly,
             item_code,
             service_level=service_level,
             lead_time=lead_time,
+            orders_df=item_orders,
         )
         if steps is None:
             raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
