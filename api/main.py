@@ -22,11 +22,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.customer_analytics import run_customer_analytics
-from backend.config import DAYS_PER_WEEK, DEFAULT_RISK_SERVICE_LEVELS
+from backend.config import DAYS_PER_WEEK, DEFAULT_RISK_SERVICE_LEVELS, INTERNAL_PARTY_CODES
 from backend.data_loader import load_fg_stock, load_order_intake
 from backend.fg_stock import enrich_with_fg_stock
 from backend.pipeline import _build_weekly_from_intake, run_pipeline
 from backend.rol_calculator import compute_rol_sensitivity, compute_rol_steps_for_item, recompute_rol_columns
+from backend.rfm_analysis import run_rfm
 
 app = FastAPI(title="Inventory Analytics API", version="2.0.0")
 
@@ -699,6 +700,17 @@ async def recompute_rol(
                 .to_dict()
             )
 
+        # Child-order mode of Order_Qty per SKU — the Dynamic ROL bin size,
+        # matching the pipeline so rol_dynamic always reconciles with the
+        # mode_order_qty column.
+        mode_map: dict[str, float] = {}
+        if "Order_Qty" in _latest_intake.columns:
+            mode_map = (
+                _latest_intake.groupby("Item_Code")["Order_Qty"]
+                .agg(lambda s: float(s.mode().iloc[0]) if not s.mode().empty else 0.0)
+                .to_dict()
+            )
+
         df = recompute_rol_columns(
             _latest_result,
             weekly,
@@ -706,6 +718,7 @@ async def recompute_rol(
             lead_time=_latest_lead_time if lead_time is None else lead_time,
             lead_time_map=lead_time_map if lead_time_map else None,
             service_level_map=service_level_map,
+            mode_map=mode_map if mode_map else None,
         )
 
         # ROL-driven FG Stock columns must track the new service level(s)
@@ -821,12 +834,21 @@ def product_rol_steps(item_code: str) -> dict[str, object]:
             _latest_intake["Item_Code"].astype(str) == str(item_code)
         ]
 
+        # Child-order mode of Order_Qty for this item — the Dynamic ROL bin
+        # size, matching the pipeline and the mode_order_qty column.
+        mode_map: dict[str, float] = {}
+        if "Order_Qty" in item_orders.columns and not item_orders.empty:
+            item_mode = item_orders["Order_Qty"].mode()
+            if not item_mode.empty:
+                mode_map = {str(item_code): float(item_mode.iloc[0])}
+
         steps = compute_rol_steps_for_item(
             weekly,
             item_code,
             service_level=service_level,
             lead_time=lead_time,
             orders_df=item_orders,
+            mode_map=mode_map if mode_map else None,
         )
         if steps is None:
             raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
@@ -859,13 +881,259 @@ def product_rol_sensitivity(item_code: str) -> dict[str, object]:
         # The intake "Lead Time" column is in DAYS — convert to weeks (÷7).
         lead_time = int(_latest_lead_time)
         if "Lead Time" in _latest_intake.columns:
-            lt_rows = _latest_intake.loc[_latest_intake["Item_Code"] == item_code, "Lead Time"]
+            lt_rows = _latest_intake.loc[
+                (_latest_intake["Item_Code"].astype(str) == str(item_code)), "Lead Time"
+            ]
             if not lt_rows.mode().empty:
                 lead_time = int(lt_rows.mode().iloc[0] / DAYS_PER_WEEK)
-        points = compute_rol_sensitivity(weekly, item_code, lead_time=lead_time)
+
+        # Child-order mode of Order_Qty for this item — the Dynamic ROL bin
+        # size, matching the pipeline and the mode_order_qty column.
+        mode_map: dict[str, float] = {}
+        if "Order_Qty" in _latest_intake.columns:
+            q_rows = _latest_intake.loc[
+                (_latest_intake["Item_Code"].astype(str) == str(item_code)), "Order_Qty"
+            ]
+            if not q_rows.mode().empty:
+                mode_map = {str(item_code): float(q_rows.mode().iloc[0])}
+
+        points = compute_rol_sensitivity(
+            weekly, item_code, lead_time=lead_time, mode_map=mode_map if mode_map else None
+        )
         if points is None:
             raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found in intake data")
         return {"item_code": item_code, "lead_time": lead_time, "points": points}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/product/{item_code}/classification-explanation")
+def product_classification_explanation(item_code: str) -> dict[str, object]:
+    """Explain why a SKU received its ABC class, RFM category, and risk category.
+
+    Recomputed on demand from the cached Order Intake with the exact same
+    helpers as the pipeline (hierarchical_abc / rfm_analysis / risk_analysis),
+    so every number in the explanation reconciles with the explorer table.
+    """
+    if _latest_result is None:
+        raise HTTPException(status_code=404, detail="No processed dataset found. Call /process first")
+    if _latest_intake is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No intake data cached. Run the pipeline from Overview first.",
+        )
+
+    try:
+        match = _latest_result[_latest_result["Item_Code"].astype(str) == str(item_code)]
+        if match.empty:
+            raise HTTPException(status_code=404, detail=f"Item_Code {item_code} not found")
+        row = match.iloc[0]
+        intake = _latest_intake
+        total_skus = int(len(_latest_result))
+
+        def _num(v: object) -> float:
+            return float(v)  # plain floats so FastAPI serializes cleanly
+
+        # ---------- ABC: this SKU's rank inside its SubGroup ----------
+        cat = str(row["Item_Category_Code"])
+        grp = str(row["Product Group Code"])
+        sub = str(row["Product_SubGroup_Code"])
+
+        sub_data = intake[
+            (intake["Item_Category_Code"].astype(str) == cat)
+            & (intake["Product Group Code"].astype(str) == grp)
+            & (intake["Product_SubGroup_Code"].astype(str) == sub)
+        ]
+        sku_summary = (
+            sub_data.groupby(["Item_Code", "Item_Name"], as_index=False)["Order_Amount"]
+            .sum()
+            .rename(columns={"Order_Amount": "Total_Order_Amount"})
+            .sort_values("Total_Order_Amount", ascending=False)
+            .reset_index(drop=True)
+        )
+        sub_total = _num(sku_summary["Total_Order_Amount"].sum())
+        if sub_total > 0:
+            sku_summary["Contribution (%)"] = sku_summary["Total_Order_Amount"] / sub_total * 100
+        else:
+            sku_summary["Contribution (%)"] = 0.0
+        sku_summary["Cumulative Contribution (%)"] = sku_summary["Contribution (%)"].cumsum()
+        sku_summary["ABC_Class"] = sku_summary["Cumulative Contribution (%)"].apply(
+            lambda c: "A" if c <= 80 else ("B" if c <= 95 else "C")
+        )
+
+        rank_idx = sku_summary.index[sku_summary["Item_Code"].astype(str) == str(item_code)]
+        abc_rank: int | None = int(rank_idx[0]) + 1 if len(rank_idx) else None
+        a_count = int((sku_summary["ABC_Class"] == "A").sum())
+        abc_peers = [
+            {
+                "rank": int(i) + 1,
+                "itemCode": str(r["Item_Code"]),
+                "itemName": str(r["Item_Name"]),
+                "amount": _num(r["Total_Order_Amount"]),
+                "contributionPct": _num(r["Contribution (%)"]),
+                "cumulativePct": _num(r["Cumulative Contribution (%)"]),
+                "abcClass": str(r["ABC_Class"]),
+            }
+            for i, r in sku_summary.head(5).iterrows()
+        ]
+        if abc_rank is not None and abc_rank > 5:
+            r = sku_summary.loc[abc_rank - 1]
+            abc_peers.append(
+                {
+                    "rank": abc_rank,
+                    "itemCode": str(r["Item_Code"]),
+                    "itemName": str(r["Item_Name"]),
+                    "amount": _num(r["Total_Order_Amount"]),
+                    "contributionPct": _num(r["Contribution (%)"]),
+                    "cumulativePct": _num(r["Cumulative Contribution (%)"]),
+                    "abcClass": str(r["ABC_Class"]),
+                }
+            )
+        abc_amount = _num(row["ABC_Quantum"]) if "ABC_Quantum" in row else None
+        abc_contribution = _num(row["Contribution (%)"]) if "Contribution (%)" in row else None
+        abc_cumulative = _num(row["Cumulative Contribution (%)"]) if "Cumulative Contribution (%)" in row else None
+        abc_narrative = (
+            f"SKUs in subgroup {sub} are ranked by total order amount. This SKU is "
+            f"#{abc_rank} of {len(sku_summary)} with ₹{abc_amount:,.0f} "
+            f"({abc_contribution:.2f}% of the subgroup). Cumulative contribution through "
+            f"this SKU is {abc_cumulative:.2f}%, within the first 80% → Class A. "
+            f"The top {a_count} SKUs together cover 80% of the subgroup's value."
+            if abc_rank is not None and abc_amount is not None and abc_cumulative is not None
+            else "ABC ranking unavailable for this SKU."
+        )
+
+        # ---------- RFM: raw features, quintile bins, category rule ----------
+        rfm = run_rfm(intake)
+        rfm_row_mask = rfm["Item_Code"].astype(str) == str(item_code)
+        if rfm_row_mask.empty or not rfm_row_mask.any():
+            raise HTTPException(status_code=404, detail=f"Item_Code {item_code} has no RFM features")
+        rfm_row = rfm.loc[rfm_row_mask].iloc[0]
+        reference_date = str(intake["OriginalOA_Date"].max().date())
+
+        def _bins(col: str, score_col: str) -> list[dict[str, object]]:
+            out: list[dict[str, object]] = []
+            for s in range(1, 6):
+                vals = rfm.loc[rfm[score_col] == s, col]
+                out.append(
+                    {
+                        "score": s,
+                        "min": _num(vals.min()) if len(vals) else None,
+                        "max": _num(vals.max()) if len(vals) else None,
+                        "count": int(len(vals)),
+                    }
+                )
+            return out
+
+        recency_pct = _num((rfm["Recency"] <= rfm_row["Recency"]).mean() * 100)
+        frequency_pct = _num((rfm["Frequency"] <= rfm_row["Frequency"]).mean() * 100)
+        monetary_pct = _num((rfm["Monetary"] <= rfm_row["Monetary"]).mean() * 100)
+        rfm_narrative = (
+            f"Recency {int(rfm_row['Recency'])} days since the last order (measured from "
+            f"{reference_date}, the newest order date in the data) → R_Score {int(rfm_row['R_Score'])}: "
+            f"this SKU is at least as recent as {recency_pct:.0f}% of the {total_skus} SKUs. "
+            f"Frequency {int(rfm_row['Frequency'])} order lines → F_Score {int(rfm_row['F_Score'])} "
+            f"({frequency_pct:.0f}% of SKUs order this often or less). "
+            f"Monetary ₹{_num(rfm_row['Monetary']):,.0f} → M_Score {int(rfm_row['M_Score'])}. "
+            f"R ≥ 4 and F ≥ 4 hold → Runner. (Monetary does not affect the category — "
+            f"only R and F decide it; RFM_Score {int(rfm_row['RFM_Score'])} = R+F+M.)"
+        )
+
+        # ---------- Risk: customer concentration in the product group ----------
+        try:
+            grp_label = f"{float(grp):.2f}"  # group codes are numeric (e.g. 1201.00)
+        except ValueError:
+            grp_label = grp
+        grp_data = intake[intake["Product Group Code"].astype(str) == grp]
+        grp_cust = (
+            grp_data.groupby("Party_Code", as_index=False)["Order_Amount"]
+            .sum()
+            .rename(columns={"Order_Amount": "Cust_Sales"})
+        )
+        grp_cust["Cust_Type"] = grp_cust["Party_Code"].apply(
+            lambda c: "Internal" if c in INTERNAL_PARTY_CODES else "External"
+        )
+        grp_total = _num(grp_cust["Cust_Sales"].sum())
+        largest = grp_cust.loc[grp_cust["Cust_Sales"].idxmax()]
+        largest_share = _num(largest["Cust_Sales"]) / grp_total * 100 if grp_total > 0 else 0.0
+        largest_type = str(largest["Cust_Type"])
+        if largest_type == "External":
+            risk_rule = (
+                "largest customer ≥ 80% → High_Risk_External; ≥ 60% → Medium_Risk_External; "
+                "otherwise Low_Risk_External"
+            )
+            risk_recomputed = "High_Risk_External" if largest_share >= 80 else (
+                "Medium_Risk_External" if largest_share >= 60 else "Low_Risk_External"
+            )
+        else:
+            risk_rule = "Internal customer groups are capped at Medium: ≥ 60% → Medium_Risk_Internal, otherwise Low_Risk_Internal"
+            risk_recomputed = "Medium_Risk_Internal" if largest_share >= 60 else "Low_Risk_Internal"
+        risk_category = str(row["Risk_Category"])
+        risk_narrative = (
+            f"Risk is a product-group metric, not a SKU metric. Product group {grp_label} has "
+            f"{len(grp_cust)} customer(s); the largest ({largest['Party_Code']}, {largest_type}) "
+            f"accounts for {largest_share:.1f}% of the group's sales. Rule: {risk_rule}. "
+            f"Hence: {risk_category}."
+        )
+
+        return {
+            "item_code": item_code,
+            "total_skus": total_skus,
+            "abc": {
+                "category": cat,
+                "productGroup": grp,
+                "subgroup": sub,
+                "rank": abc_rank,
+                "totalSkusInScope": int(len(sku_summary)),
+                "amount": abc_amount,
+                "scopeAmount": sub_total,
+                "contributionPct": abc_contribution,
+                "cumulativePct": abc_cumulative,
+                "abcClass": str(row["ABC_Class"]),
+                "aCount": a_count,
+                "thresholds": {"A": 80, "B": 95},
+                "narrative": abc_narrative,
+                "peers": abc_peers,
+            },
+            "rfm": {
+                "referenceDate": reference_date,
+                "recency": int(rfm_row["Recency"]),
+                "frequency": int(rfm_row["Frequency"]),
+                "monetary": _num(rfm_row["Monetary"]),
+                "rScore": int(rfm_row["R_Score"]),
+                "fScore": int(rfm_row["F_Score"]),
+                "mScore": int(rfm_row["M_Score"]),
+                "rfmScore": int(rfm_row["RFM_Score"]),
+                "category": str(rfm_row["RFM_Category"]),
+                "recencyPct": recency_pct,
+                "frequencyPct": frequency_pct,
+                "monetaryPct": monetary_pct,
+                "totalSkus": int(len(rfm)),
+                "bins": {
+                    "recency": _bins("Recency", "R_Score"),
+                    "frequency": _bins("Frequency", "F_Score"),
+                    "monetary": _bins("Monetary", "M_Score"),
+                },
+                "rules": [
+                    {"name": "Runner", "rule": "R_Score ≥ 4 and F_Score ≥ 4"},
+                    {"name": "Repeater", "rule": "R_Score ≥ 3 and F_Score ≥ 3"},
+                    {"name": "Dormant", "rule": "R_Score ≤ 2 and F_Score ≤ 2"},
+                    {"name": "Slow Mover", "rule": "everything else"},
+                ],
+                "narrative": rfm_narrative,
+            },
+            "risk": {
+                "productGroup": grp_label,
+                "customerCount": int(len(grp_cust)),
+                "largestCustomer": str(largest["Party_Code"]),
+                "largestCustomerType": largest_type,
+                "largestSharePct": largest_share,
+                "riskCategory": risk_category,
+                "rule": risk_rule,
+                "narrative": risk_narrative,
+            },
+        }
     except HTTPException:
         raise
     except Exception as exc:

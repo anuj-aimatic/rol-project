@@ -114,6 +114,9 @@ def run_pipeline(
     )
     mode_qty["mode_valid"] = mode_qty["mode_order_qty"] > 0
     combined = combined.merge(mode_qty, on="Item_Code", how="left")
+    # The same child-order mode doubles as the Dynamic ROL bin size so the
+    # policy operates at the order level and matches the mode_order_qty column.
+    mode_map: dict[str, float] = mode_qty.set_index("Item_Code")["mode_order_qty"].to_dict()
 
     # Compute per-SKU Customer Type (Internal / External / Internal + External)
     print("       Computing Customer Type per SKU...")
@@ -177,6 +180,7 @@ def run_pipeline(
         lead_time=lead_time,
         lead_time_map=lead_time_per_sku if lead_time_per_sku else None,
         service_level_map=service_level_map,
+        mode_map=mode_map if mode_map else None,
     )
 
     # Ensure lead_time column is present in final output

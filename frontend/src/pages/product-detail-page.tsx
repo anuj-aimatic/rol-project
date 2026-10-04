@@ -1,6 +1,6 @@
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -15,7 +15,7 @@ import {
 import { ContentCard } from '@/components/common/content-card'
 import { PageHeader } from '@/components/common/page-header'
 import { apiClient } from '@/services/api/client'
-import { useProcessedData } from '@/services/state/processed-data-context'
+import { useProcessedData, type InventoryRecord } from '@/services/state/processed-data-context'
 
 function fmt(v: unknown, decimals = 2): string {
   if (v === null || v === undefined) return '—'
@@ -739,12 +739,284 @@ function StaticVsDynamicScenario({ row, trace }: { row: Record<string, unknown>;
   )
 }
 
+/* ---------- "Why?" explanation for ABC / RFM / Risk classifications ---------- */
+
+interface QuintileBin {
+  score: number
+  min: number | null
+  max: number | null
+  count: number
+}
+
+interface ClassExplanation {
+  item_code: string
+  total_skus: number
+  abc: {
+    category: string
+    productGroup: string
+    subgroup: string
+    rank: number | null
+    totalSkusInScope: number
+    amount: number | null
+    scopeAmount: number
+    contributionPct: number | null
+    cumulativePct: number | null
+    abcClass: string
+    aCount: number
+    thresholds: { A: number; B: number }
+    narrative: string
+    peers: {
+      rank: number
+      itemCode: string
+      itemName: string
+      amount: number
+      contributionPct: number
+      cumulativePct: number
+      abcClass: string
+    }[]
+  }
+  rfm: {
+    referenceDate: string
+    recency: number
+    frequency: number
+    monetary: number
+    rScore: number
+    fScore: number
+    mScore: number
+    rfmScore: number
+    category: string
+    recencyPct: number
+    frequencyPct: number
+    monetaryPct: number
+    totalSkus: number
+    bins: { recency: QuintileBin[]; frequency: QuintileBin[]; monetary: QuintileBin[] }
+    rules: { name: string; rule: string }[]
+    narrative: string
+  }
+  risk: {
+    productGroup: string
+    customerCount: number
+    largestCustomer: string
+    largestCustomerType: string
+    largestSharePct: number
+    riskCategory: string
+    rule: string
+    narrative: string
+  }
+}
+
+function QuintileStrip({ bins, active }: { bins: QuintileBin[]; active: number }) {
+  return (
+    <div className="grid grid-cols-5 gap-1">
+      {bins.map((b) => {
+        const isActive = b.score === active
+        return (
+          <div
+            key={b.score}
+            className={`rounded-lg border px-1.5 py-1 text-center text-[10px] leading-tight ${
+              isActive
+                ? 'border-primary bg-primary/10 text-foreground'
+                : 'border-border text-muted-foreground'
+            }`}
+          >
+            <p className="font-semibold">{b.score}</p>
+            <p>{b.min === null ? '—' : b.min === b.max ? fmt(b.min, 0) : `${fmt(b.min, 0)}–${fmt(b.max, 0)}`}</p>
+            <p className="text-[9px] opacity-75">{b.count} SKUs</p>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ClassificationWhy({
+  itemCode,
+  category,
+  rfmCategory,
+  riskCategory,
+}: {
+  itemCode: string
+  category: string
+  rfmCategory: string
+  riskCategory: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState<ClassExplanation | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const attemptedRef = useRef(false)
+
+  // Reset when navigating between SKUs within the same mounted page.
+  useEffect(() => {
+    setOpen(false)
+    setData(null)
+    setError(null)
+    attemptedRef.current = false
+  }, [itemCode])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    // Fetch lazily on first expand; allow a retry if the first attempt failed.
+    if (next && !attemptedRef.current) {
+      attemptedRef.current = true
+      setLoading(true)
+      apiClient
+        .get<ClassExplanation>(`/product/${encodeURIComponent(itemCode)}/classification-explanation`)
+        .then((res) => setData(res.data))
+        .catch((err) => {
+          attemptedRef.current = false
+          setError(
+            err && typeof err === 'object' && 'response' in err
+              ? String((err as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? '')
+              : 'Could not load the explanation.',
+          )
+        })
+        .finally(() => setLoading(false))
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={toggle}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        Why {category} class · {rfmCategory} · {riskCategory}?
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-3">
+          {loading && (
+            <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+              <Loader2 size={14} className="animate-spin" />
+              Recomputing the classification trace for this SKU…
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+              {error || 'Explanation unavailable. Run the pipeline from Overview first.'}
+            </div>
+          )}
+
+          {data && (
+            <>
+              {/* ---------- ABC ---------- */}
+              <div className="rounded-xl border border-border bg-background/40 p-3">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  ABC Class — Pareto ranking inside subgroup {data.abc.subgroup}
+                </p>
+                <p className="text-xs leading-relaxed">{data.abc.narrative}</p>
+                {data.abc.peers.length > 0 && (
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full text-left text-[11px]">
+                      <thead>
+                        <tr className="border-b border-border text-muted-foreground">
+                          <th className="py-1 pr-2 font-medium">Rank</th>
+                          <th className="py-1 pr-2 font-medium">SKU</th>
+                          <th className="py-1 pr-2 text-right font-medium">Amount</th>
+                          <th className="py-1 pr-2 text-right font-medium">Contribution %</th>
+                          <th className="py-1 pr-2 text-right font-medium">Cumulative %</th>
+                          <th className="py-1 font-medium">Class</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.abc.peers.map((p) => {
+                          const isSelf = String(p.itemCode) === String(itemCode)
+                          return (
+                            <tr
+                              key={`${p.rank}-${p.itemCode}`}
+                              className={`border-b border-border/50 last:border-0 ${isSelf ? 'bg-primary/10 font-medium' : ''}`}
+                            >
+                              <td className="py-1 pr-2">#{p.rank}</td>
+                              <td className="max-w-[180px] truncate py-1 pr-2" title={p.itemName}>
+                                {p.itemCode}
+                                {isSelf ? ' (this SKU)' : ''}
+                              </td>
+                              <td className="py-1 pr-2 text-right">{fmt(p.amount, 0)}</td>
+                              <td className="py-1 pr-2 text-right">{fmt(p.contributionPct, 2)}</td>
+                              <td className="py-1 pr-2 text-right">{fmt(p.cumulativePct, 2)}</td>
+                              <td className="py-1">{p.abcClass}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* ---------- RFM ---------- */}
+              <div className="rounded-xl border border-border bg-background/40 p-3">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  RFM — quintile scores (1–5) over {data.rfm.totalSkus.toLocaleString()} SKUs
+                </p>
+                <p className="text-xs leading-relaxed">{data.rfm.narrative}</p>
+                <div className="mt-2 grid gap-3 md:grid-cols-3">
+                  <div>
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Recency bins (days · lower = fresher)
+                    </p>
+                    <QuintileStrip bins={data.rfm.bins.recency} active={data.rfm.rScore} />
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Frequency bins (order lines)
+                    </p>
+                    <QuintileStrip bins={data.rfm.bins.frequency} active={data.rfm.fScore} />
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Monetary bins (amount)
+                    </p>
+                    <QuintileStrip bins={data.rfm.bins.monetary} active={data.rfm.mScore} />
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {data.rfm.rules.map((r) => {
+                    const isMatch = r.name === data.rfm.category
+                    return (
+                      <span
+                        key={r.name}
+                        className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                          isMatch
+                            ? 'border-primary bg-primary/10 font-medium text-foreground'
+                            : 'border-border text-muted-foreground'
+                        }`}
+                      >
+                        {r.name}: {r.rule}
+                        {isMatch ? ' ✓' : ''}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* ---------- Risk ---------- */}
+              <div className="rounded-xl border border-border bg-background/40 p-3">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Risk Category — customer concentration in product group {data.risk.productGroup}
+                </p>
+                <p className="text-xs leading-relaxed">{data.risk.narrative}</p>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ---------- Main page component ---------- */
 
 export function ProductDetailPage() {
   const { itemCode } = useParams()
-  const { result } = useProcessedData()
+  const { result, setResult } = useProcessedData()
 
+  const [liveRow, setLiveRow] = useState<InventoryRecord | null>(null)
   const [trace, setTrace] = useState<RolTrace | null>(null)
   const [loadingSteps, setLoadingSteps] = useState(false)
   const [stepsError, setStepsError] = useState<string | null>(null)
@@ -807,6 +1079,39 @@ export function ProductDetailPage() {
     }
   }, [itemCode])
 
+  // Summary metrics come from the processed-data snapshot (localStorage), which
+  // can predate a backend recompute. Refresh this single row from the live API
+  // on mount so the cards always match the current backend state.
+  useEffect(() => {
+    if (!itemCode) return
+    let cancelled = false
+    setLiveRow(null)
+    const load = async () => {
+      try {
+        const res = await apiClient.get<InventoryRecord>(`/product/${encodeURIComponent(itemCode)}`)
+        if (!cancelled && res.data) setLiveRow(res.data)
+      } catch {
+        if (!cancelled) setLiveRow(null) // keep the snapshot row if the fetch fails
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [itemCode])
+
+  // Share the refreshed row with the rest of the app (explorer table, exports)
+  // so every view agrees with the backend, not just this page.
+  useEffect(() => {
+    if (!liveRow || !result) return
+    const idx = result.data.findIndex((r) => String(r.Item_Code ?? '') === String(liveRow.Item_Code))
+    if (idx >= 0 && result.data[idx] === liveRow) return // already synced
+    const data = [...result.data]
+    if (idx >= 0) data[idx] = liveRow
+    else data.push(liveRow)
+    setResult({ ...result, data, rows: data.length })
+  }, [liveRow, result, itemCode, setResult])
+
   if (!result) {
     return (
       <div>
@@ -821,7 +1126,8 @@ export function ProductDetailPage() {
     )
   }
 
-  const row = result.data.find((r) => String(r.Item_Code ?? '') === itemCode)
+  const snapshotRow = result.data.find((r) => String(r.Item_Code ?? '') === itemCode)
+  const row = liveRow ?? snapshotRow
   if (!row) {
     return (
       <div>
@@ -851,12 +1157,12 @@ export function ProductDetailPage() {
     ['Static ROL', 'Safety Stock (Static)', fmt(row.st_safety_stock, 1)],
     ['Static ROL', 'Avg Weekly (Static)', fmt(row.st_avg_weekly_demand, 1)],
     ['Static ROL', 'Dmax Week (Static)', fmt(row.st_dmax_week, 0)],
-    ['Static ROL', 'Mode Weekly (Static)', fmt(row.st_mode_weekly_demand, 0)],
+    ['Static ROL', 'Mode Weekly Demand (Static)', fmt(row.st_mode_weekly_demand, 0)],
     ['Dynamic ROL', 'ROL (Dynamic)', fmt(row.rol_dynamic, 1)],
     ['Dynamic ROL', 'Safety Stock (Dynamic)', fmt(row.dy_safety_stock, 1)],
     ['Dynamic ROL', 'Avg Weekly (Dynamic)', fmt(row.dy_avg_weekly_demand, 1)],
     ['Dynamic ROL', 'Dmax Week (Dynamic)', fmt(row.dy_dmax_week, 0)],
-    ['Dynamic ROL', 'Mode Weekly (Dynamic)', fmt(row.dy_mode_weekly_demand, 0)],
+    ['Dynamic ROL', 'Mode Order Qty (Dynamic Bin)', fmt(row.dy_mode_weekly_demand, 0)],
   ]
 
   const groups = [...new Set(metrics.map(([g]) => g))]
@@ -896,6 +1202,15 @@ export function ProductDetailPage() {
                   )
                 })}
             </div>
+
+            {group === 'Classification' && (
+              <ClassificationWhy
+                itemCode={itemCode ?? ''}
+                category={String(row.ABC_Class ?? '')}
+                rfmCategory={String(row.RFM_Category ?? '')}
+                riskCategory={String(row.Risk_Category ?? '')}
+              />
+            )}
           </ContentCard>
         </div>
       ))}

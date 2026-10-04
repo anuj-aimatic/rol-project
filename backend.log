@@ -1,199 +1,114 @@
 INFO:     Will watch for changes in these directories: ['/Users/apple/AI Matics/Fibro/ROL Project']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [48925] using StatReload
-INFO:     Started server process [48976]
+INFO:     Started reloader process [94688] using StatReload
+INFO:     Started server process [94737]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     127.0.0.1:59181 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59181 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59189 - "POST /sheets HTTP/1.1" 200 OK
-[1/6] Loading Order Intake data (sheet: M1)...
-       14636 rows, 13 columns
-[2/6] Computing product group risk...
-       38 product groups classified
-[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
-       3167 SKUs classified (ABC)
-[4/6] Running SKU-level RFM...
-       3167 SKUs classified (RFM)
-[5/6] Merging ABC + RFM + Risk at SKU level...
-       Computing mode_order_qty per SKU...
-       Computing Customer Type per SKU...
-       Combined: 3167 SKU rows
-[6/7] Computing ROL (static & dynamic) from intake data...
-       Weekly demand records: 11443
-       Per-SKU lead times extracted for 3167 items
-       Done! 3167 rows, 46 columns
-[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
-       FG Stock: 3902 SKUs mapped
-       Final: 3167 rows, 55 columns
-[1/6] Loading Order Intake data (sheet: M2&H2)...
-       26498 rows, 13 columns
-[2/6] Computing product group risk...
-       69 product groups classified
-[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
-       3499 SKUs classified (ABC)
-[4/6] Running SKU-level RFM...
-       3499 SKUs classified (RFM)
-[5/6] Merging ABC + RFM + Risk at SKU level...
-       Computing mode_order_qty per SKU...
-       Computing Customer Type per SKU...
-       Combined: 3499 SKU rows
-[6/7] Computing ROL (static & dynamic) from intake data...
-       Weekly demand records: 17625
-       Per-SKU lead times extracted for 3499 items
-       Done! 3499 rows, 46 columns
-[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
-       FG Stock: 3902 SKUs mapped
-       Final: 3499 rows, 55 columns
-INFO:     127.0.0.1:59189 - "POST /process HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59225 - "POST /recompute-rol HTTP/1.1" 400 Bad Request
-[1/6] Loading Order Intake data (sheet: M1)...
-       14636 rows, 13 columns
-[2/6] Computing product group risk...
-       38 product groups classified
-[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
-       3167 SKUs classified (ABC)
-[4/6] Running SKU-level RFM...
-       3167 SKUs classified (RFM)
-[5/6] Merging ABC + RFM + Risk at SKU level...
-       Computing mode_order_qty per SKU...
-       Computing Customer Type per SKU...
-       Combined: 3167 SKU rows
-[6/7] Computing ROL (static & dynamic) from intake data...
-       Weekly demand records: 11443
-       Per-SKU lead times extracted for 3167 items
-       Done! 3167 rows, 46 columns
-[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
-       FG Stock: 3902 SKUs mapped
-       Final: 3167 rows, 55 columns
-INFO:     127.0.0.1:59225 - "POST /process HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59531 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59531 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51584 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51585 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51587 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51585 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51601 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51601 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51601 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51604 - "GET /sheets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51604 - "POST /process HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51625 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51626 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51627 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51626 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51625 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51626 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51627 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51626 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51810 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+       FG Stock: 3902 SKUs mapped (uploaded export)
+INFO:     127.0.0.1:51882 - "POST /recompute-rol HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51896 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51897 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52035 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52034 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52036 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52034 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52046 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52046 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52044 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52045 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52046 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52053 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53317 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53319 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53315 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53316 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53319 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53325 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62753 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62752 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62752 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62752 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62752 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62752 - "GET /product/NS.CL001.424601.0046 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62752 - "GET /product/NS.CL001.424601.0046/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /product/NS.CL001.424601.0046/rol-sensitivity HTTP/1.1" 200 OK
 WARNING:  StatReload detected changes in 'api/main.py'. Reloading...
 INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
-INFO:     Finished server process [48976]
-INFO:     Started server process [59274]
+INFO:     Finished server process [94737]
+INFO:     Started server process [97248]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     127.0.0.1:60051 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60051 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62883 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62883 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63002 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63002 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64019 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64019 - "GET /sheets HTTP/1.1" 200 OK
-[1/6] Loading Order Intake data (sheet: M1)...
-       14636 rows, 13 columns
-[2/6] Computing product group risk...
-       38 product groups classified
-[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
-       3167 SKUs classified (ABC)
-[4/6] Running SKU-level RFM...
-       3167 SKUs classified (RFM)
-[5/6] Merging ABC + RFM + Risk at SKU level...
-       Computing mode_order_qty per SKU...
-       Computing Customer Type per SKU...
-       Combined: 3167 SKU rows
-[6/7] Computing ROL (static & dynamic) from intake data...
-       Weekly demand records: 11443
-       Per-SKU lead times extracted for 3167 items
-       Done! 3167 rows, 46 columns
-[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
-       FG Stock: 3902 SKUs mapped
-       Final: 3167 rows, 55 columns
-[1/6] Loading Order Intake data (sheet: M2&H2)...
-       26498 rows, 13 columns
-[2/6] Computing product group risk...
-       69 product groups classified
-[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
-       3499 SKUs classified (ABC)
-[4/6] Running SKU-level RFM...
-       3499 SKUs classified (RFM)
-[5/6] Merging ABC + RFM + Risk at SKU level...
-       Computing mode_order_qty per SKU...
-       Computing Customer Type per SKU...
-       Combined: 3499 SKU rows
-[6/7] Computing ROL (static & dynamic) from intake data...
-       Weekly demand records: 17625
-       Per-SKU lead times extracted for 3499 items
-       Done! 3499 rows, 46 columns
-[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
-       FG Stock: 3902 SKUs mapped
-       Final: 3499 rows, 55 columns
-INFO:     127.0.0.1:64019 - "POST /process HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64065 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64065 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64245 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64245 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64408 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64409 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65181 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65181 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65181 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65181 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65349 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65349 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49152 - "GET /product/NS.CT055.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65535 - "GET /product/NS.CT055.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49152 - "GET /product/NS.CT055.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65535 - "GET /product/NS.CT055.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49152 - "GET /product/NS.CT055.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65535 - "GET /product/NS.CT055.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49152 - "GET /product/NS.CT055.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65535 - "GET /product/NS.CT055.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49159 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49159 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49159 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49159 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49163 - "GET /product/NS.CG00099.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49162 - "GET /product/NS.CG00099.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49164 - "GET /product/NS.CG00099.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49162 - "GET /product/NS.CG00099.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49163 - "GET /product/NS.CG00099.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49162 - "GET /product/NS.CG00099.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49163 - "GET /product/NS.CG00099.424601.0001/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49162 - "GET /product/NS.CG00099.424601.0001/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49615 - "GET /product/NS.CA049.424601.0005/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49616 - "GET /product/NS.CA049.424601.0005/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49615 - "GET /product/NS.CA049.424601.0005/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49616 - "GET /product/NS.CA049.424601.0005/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49615 - "GET /product/NS.CA049.424601.0005/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49616 - "GET /product/NS.CA049.424601.0005/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49615 - "GET /product/NS.CA049.424601.0005/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49616 - "GET /product/NS.CA049.424601.0005/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49706 - "GET /product/NS.CA049.424601.0005/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49707 - "GET /product/NS.CA049.424601.0005/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49711 - "GET /product/NS.CA049.424601.0005/rol-steps HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49707 - "GET /product/NS.CA049.424601.0005/rol-sensitivity HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52843 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52843 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52843 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52843 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52896 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52896 - "GET /sheets HTTP/1.1" 200 OK
-[1/6] Loading Order Intake data (sheet: M2&H2)...
-       26498 rows, 13 columns
-[2/6] Computing product group risk...
-       69 product groups classified
-[3/6] Running hierarchical ABC (Category->Group->SubGroup->SKU)...
-       3499 SKUs classified (ABC)
-[4/6] Running SKU-level RFM...
-       3499 SKUs classified (RFM)
-[5/6] Merging ABC + RFM + Risk at SKU level...
-       Computing mode_order_qty per SKU...
-       Computing Customer Type per SKU...
-       Combined: 3499 SKU rows
-[6/7] Computing ROL (static & dynamic) from intake data...
-       Weekly demand records: 17625
-       Per-SKU lead times extracted for 3499 items
-       Done! 3499 rows, 46 columns
-[7/7] Enriching with FG Stock (valuation, deficit, coverage)...
-       FG Stock: 3902 SKUs mapped
-       Final: 3499 rows, 55 columns
-INFO:     127.0.0.1:52896 - "POST /process HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52897 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52897 - "GET /sheets HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52897 - "POST /process HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64386 - "GET /product/2016.202.20.200.055.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64389 - "GET /product/2016.202.20.200.055.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64387 - "GET /product/2016.202.20.200.055.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64388 - "GET /product/2016.202.20.200.055.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64387 - "GET /product/2016.202.20.200.055.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64387 - "GET /product/2016.202.20.200.055.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64388 - "GET /product/2016.202.20.200.055.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64389 - "GET /product/2016.202.20.200.055.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64389 - "GET /product/2016.202.20.200.055.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64388 - "GET /product/2016.202.20.200.055.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64388 - "GET /product/2016.202.20.200.055.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64387 - "GET /product/2016.202.20.200.055.1/rol-steps HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'api/main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [97248]
+INFO:     Started server process [97377]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:65166 - "GET /product/NS.CL001.424601.0046/classification-explanation HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'api/main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [97377]
+INFO:     Started server process [97728]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:65177 - "GET /product/NS.CL001.424601.0046/classification-explanation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65222 - "GET /product/2016.202.20.200.055.1/classification-explanation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /product/2016.204.00.150.032.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /product/2016.204.00.150.032.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65226 - "GET /product/2016.204.00.150.032.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65227 - "GET /product/2016.204.00.150.032.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65227 - "GET /product/2016.204.00.150.032.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65227 - "GET /product/2016.204.00.150.032.1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65226 - "GET /product/2016.204.00.150.032.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /product/2016.204.00.150.032.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65226 - "GET /product/2016.204.00.150.032.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /product/2016.204.00.150.032.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65226 - "GET /product/2016.204.00.150.032.1/rol-sensitivity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /product/2016.204.00.150.032.1/rol-steps HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /product/2016.204.00.150.032.1/classification-explanation HTTP/1.1" 200 OK

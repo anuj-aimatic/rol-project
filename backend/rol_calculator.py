@@ -130,11 +130,31 @@ def _rol_metrics(d_avg_week: float, d_max_week: float, lead_time: float) -> dict
 SENSITIVITY_LEVELS = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
 
 
+def _mode_from_map(
+    mode_map: dict[str, float] | None,
+    item_code: str,
+    fallback: int,
+) -> int:
+    """Resolve an item's Dynamic bin size from a per-SKU mode map.
+
+    The map carries the **child-order** mode of Order_Qty (same value as the
+    ``mode_order_qty`` column), so the Dynamic ROL policy and the Demand card
+    always quote the same number. Falls back to ``fallback`` when the item is
+    absent from the map.
+    """
+    if mode_map:
+        raw = mode_map.get(item_code)
+        if raw is not None and raw > 0:
+            return int(raw)
+    return fallback
+
+
 def compute_rol_sensitivity(
     weekly: pd.DataFrame,
     item_code: str,
     service_levels: list[float] | None = None,
     lead_time: float = DEFAULT_LEAD_TIME_WEEKS,
+    mode_map: dict[str, float] | None = None,
 ) -> list[dict[str, float]] | None:
     """Compute Static & Dynamic ROL across a sweep of service levels.
 
@@ -142,6 +162,9 @@ def compute_rol_sensitivity(
     X axis = service level, Y axis = ROL, one line per policy. Reuses the
     exact same math as the pipeline (``_rol_metrics_for_series``) so the
     curve always agrees with the numbers in the explorer table.
+
+    ``mode_map`` (optional) maps Item_Code to the child-order mode of
+    Order_Qty used as the Dynamic bin size, matching the pipeline.
 
     Returns ``None`` when the item has no weekly demand records.
     """
@@ -158,11 +181,12 @@ def compute_rol_sensitivity(
     mode_of_weekly = int(vals.mode().iloc[0]) if not vals.mode().empty else 0
     if mode_of_weekly <= 0:
         mode_of_weekly = 1
+    dynamic_bin = _mode_from_map(mode_map, item_code, mode_of_weekly)
 
     points: list[dict[str, float]] = []
     for sl in levels:
         static_res = _rol_metrics_for_series(vals, static_bin, total_weeks, sl, lead_time)
-        dynamic_res = _rol_metrics_for_series(vals, mode_of_weekly, total_weeks, sl, lead_time)
+        dynamic_res = _rol_metrics_for_series(vals, dynamic_bin, total_weeks, sl, lead_time)
         points.append(
             {
                 "service_level": round(sl, 2),
@@ -266,6 +290,7 @@ def add_rol_columns(
     lead_time: int = DEFAULT_LEAD_TIME_WEEKS,
     lead_time_map: dict[str, float] | None = None,
     service_level_map: dict[str, float] | None = None,
+    mode_map: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Add ``rol_static``, ``rol_dynamic`` and detailed ROL metric columns.
 
@@ -274,6 +299,11 @@ def add_rol_columns(
     mode. When ``None``, the single global ``service_level`` is used for
     every SKU (legacy behaviour). The level actually applied per SKU is
     recorded in a new ``service_level`` column.
+
+    ``mode_map`` (optional) maps Item_Code to the child-order mode of
+    Order_Qty (the same value as the ``mode_order_qty`` column). When
+    provided it is used as the Dynamic ROL bin size so the policy operates
+    at the order level instead of the weekly-aggregate level.
 
     For each SKU the following groups of columns are appended:
 
@@ -338,12 +368,14 @@ def add_rol_columns(
         mode_of_weekly = int(item_vals.mode().iloc[0]) if not item_vals.mode().empty else 0
         if mode_of_weekly <= 0:
             mode_of_weekly = 1
+        # Dynamic bin size: child-order mode of Order_Qty when a mode map is
+        # supplied (falls back to the weekly-aggregate mode otherwise).
+        dynamic_bin = _mode_from_map(mode_map, ic, mode_of_weekly)
 
         # Shared base metrics (same for both static & dynamic except where noted)
         base_shared = {
             "weeks_with_orders": weeks_with_orders,
             "total_sales": round(item_sales, 2),
-            "mode_weekly_demand": mode_of_weekly,
         }
 
         # Store bare weeks_with_orders for the standalone column
@@ -360,6 +392,7 @@ def add_rol_columns(
         m["rol_static"] = static_res["rol"]
         for k, v in base_shared.items():
             m[f"st_{k}"] = v
+        m["st_mode_weekly_demand"] = mode_of_weekly
         m["st_avg_weekly_demand"] = d_avg
         m["st_avg_monthly_demand"] = round(d_avg * 4, 2)
         m["st_dmax_week"] = d_max
@@ -367,7 +400,6 @@ def add_rol_columns(
         m["st_safety_stock"] = static_res["safety_stock"]
 
         # ----- Dynamic ROL (uses per-SKU lead time, truncated to int) -----
-        dynamic_bin = mode_of_weekly
         dynamic_res = _rol_metrics_for_series(
             item_vals, dynamic_bin, total_weeks_global, item_sl, int(item_lt)
         )
@@ -376,6 +408,7 @@ def add_rol_columns(
         m["rol_dynamic"] = dynamic_res["rol"]
         for k, v in base_shared.items():
             m[f"dy_{k}"] = v
+        m["dy_mode_weekly_demand"] = dynamic_bin
         m["dy_avg_weekly_demand"] = d_avg
         m["dy_avg_monthly_demand"] = round(d_avg * 4, 2)
         m["dy_dmax_week"] = d_max
@@ -411,6 +444,7 @@ def recompute_rol_columns(
     lead_time: int = DEFAULT_LEAD_TIME_WEEKS,
     lead_time_map: dict[str, float] | None = None,
     service_level_map: dict[str, float] | None = None,
+    mode_map: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Recompute only the ROL columns of an existing output with new service levels.
 
@@ -431,6 +465,7 @@ def recompute_rol_columns(
         lead_time=lead_time,
         lead_time_map=lead_time_map,
         service_level_map=service_level_map,
+        mode_map=mode_map,
     )
 
 
@@ -594,6 +629,7 @@ def compute_rol_steps_for_item(
     service_level: float = DEFAULT_SERVICE_LEVEL,
     lead_time: float = DEFAULT_LEAD_TIME_WEEKS,
     orders_df: pd.DataFrame | None = None,
+    mode_map: dict[str, float] | None = None,
 ) -> dict[str, object] | None:
     """Build a full step-by-step calculation trace for Static & Dynamic ROL.
 
@@ -605,6 +641,9 @@ def compute_rol_steps_for_item(
     ``orders_df`` (optional) is the item's deduped order lines from the Order
     Intake; when provided, each weekly record carries a child ``orders`` list
     (OA_No, customer, date, qty, amount) that sums to the weekly demand.
+
+    ``mode_map`` (optional) maps Item_Code to the child-order mode of
+    Order_Qty used as the Dynamic bin size, matching the pipeline.
 
     Returns ``None`` when the item has no weekly demand records.
     """
@@ -813,6 +852,7 @@ def compute_rol_steps_for_item(
     mode_of_weekly = int(vals.mode().iloc[0]) if not vals.mode().empty else 0
     if mode_of_weekly <= 0:
         mode_of_weekly = 1
+    dynamic_bin = _mode_from_map(mode_map, item_code, mode_of_weekly)
 
     return {
         "item_code": item_code,
@@ -820,6 +860,13 @@ def compute_rol_steps_for_item(
         "lead_time": lead_time,
         "total_weeks": total_weeks,
         "static": _trace(static_bin, _volume_reason(static_bin)),
-        "dynamic": _trace(mode_of_weekly, f"Mode of weekly demand = {mode_of_weekly}"),
+        "dynamic": _trace(
+            dynamic_bin,
+            (
+                f"Child-order mode of Order_Qty = {dynamic_bin} (matches Mode Order Qty)"
+                if mode_map and dynamic_bin != mode_of_weekly
+                else f"Mode of weekly demand = {dynamic_bin}"
+            ),
+        ),
         "weekly_records": weekly_records,
     }
